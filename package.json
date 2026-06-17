@@ -1,0 +1,42 @@
+{
+  "name": "libwps-js",
+  "version": "0.1.0",
+  "description": "Pure JavaScript reader for WPS Office OLE2 .wps files backed by Word binary streams.",
+  "type": "module",
+  "main": "./src/index.js",
+  "exports": {
+    ".": "./src/index.js"
+  },
+  "files": [
+    "bin",
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "bin": {
+    "libwps-js": "./bin/libwps-js.js",
+    "wps-to-docx": "./bin/wps-to-docx.js"
+  },
+  "scripts": {
+    "test": "node --test"
+  },
+  "keywords": [
+    "wps",
+    "ole2",
+    "cfb",
+    "doc",
+    "word"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/devinhurry/libwps-js.git"
+  },
+  "bugs": {
+    "url": "https://github.com/devinhurry/libwps-js/issues"
+  },
+  "homepage": "https://github.com/devinhurry/libwps-js#readme",
+  "engines": {
+    "node": ">=18"
+  }
+}
