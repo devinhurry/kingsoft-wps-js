@@ -22,10 +22,26 @@
   },
   "keywords": [
     "wps",
+    "wps-office",
+    "wps-file",
     "ole2",
     "cfb",
+    "compound-file-binary",
     "doc",
-    "word"
+    "docx",
+    "word",
+    "word-binary",
+    "fib",
+    "clx",
+    "pcdt",
+    "piece-table",
+    "utf-16le",
+    "text-extraction",
+    "converter",
+    "wps-to-docx",
+    "parser",
+    "javascript",
+    "nodejs"
   ],
   "license": "MIT",
   "repository": {
