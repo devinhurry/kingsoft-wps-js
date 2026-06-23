@@ -5,8 +5,13 @@ import { readWps, normalizeComparableText } from "../src/index.js";
 import { wpsToDocxBuffer } from "../src/docx.js";
 import { readDocxMainText, readDocxDocumentXml, readZipEntry } from "./fixtures-docx.js";
 
+const BASIC_WPS = "sample/basic/original.wps";
+const BASIC_DOCX = "sample/basic/expected.docx";
+const FULL_WPS = "sample/full/original.wps";
+const FULL_DOCX = "sample/full/expected.docx";
+
 test("lists and reads OLE2 streams from a WPS file", async () => {
-  const document = readWps(await readFile("ole2-full.wps"));
+  const document = readWps(await readFile(FULL_WPS));
 
   assert.equal(document.type, "wps-ole2-word-binary");
   assert.deepEqual(
@@ -27,16 +32,16 @@ test("lists and reads OLE2 streams from a WPS file", async () => {
 });
 
 test("extracts the same readable text as the one-page DOCX export", async () => {
-  const wps = readWps(await readFile("ole2-one-page.wps"));
-  const docxText = readDocxMainText(await readFile("docx-one-page.docx"));
+  const wps = readWps(await readFile(BASIC_WPS));
+  const docxText = readDocxMainText(await readFile(BASIC_DOCX));
 
   assert.equal(normalizeComparableText(wps.bodyText), normalizeComparableText(docxText));
 });
 
 test("extracts the readable text from the full WPS export", async () => {
-  const wps = readWps(await readFile("ole2-full.wps"));
+  const wps = readWps(await readFile(FULL_WPS));
   const docxComparableText = normalizeComparableText(
-    readDocxMainText(await readFile("docx-full.docx")),
+    readDocxMainText(await readFile(FULL_DOCX)),
   );
   const wpsComparableText = normalizeComparableText(wps.bodyText);
 
@@ -47,7 +52,7 @@ test("extracts the readable text from the full WPS export", async () => {
 });
 
 test("converts WPS text into a readable DOCX package", async () => {
-  const wps = readWps(await readFile("ole2-one-page.wps"));
+  const wps = readWps(await readFile(BASIC_WPS));
   const docx = wpsToDocxBuffer(wps, {
     title: "ole2-one-page.wps",
     creator: "test",
@@ -60,7 +65,7 @@ test("converts WPS text into a readable DOCX package", async () => {
 });
 
 test("extracts paragraph line spacing from PAPX pages", async () => {
-  const wps = readWps(await readFile("ole2-one-page.wps"));
+  const wps = readWps(await readFile(BASIC_WPS));
   assert.ok(wps.paragraphProperties.length >= 12);
   assert.equal(wps.paragraphProperties[0].lineSpacing.twips, 594);
   assert.equal(wps.paragraphProperties[0].lineSpacing.rule, "exact");
@@ -70,7 +75,7 @@ test("extracts paragraph line spacing from PAPX pages", async () => {
 });
 
 test("extracts custom paragraph tab stops from PAPX pages", async () => {
-  const wps = readWps(await readFile("ole2-one-page.wps"));
+  const wps = readWps(await readFile(BASIC_WPS));
   assert.deepEqual(wps.paragraphProperties[9].tabs.map((tab) => tab.position), [
     4464,
     4690,
@@ -87,7 +92,7 @@ test("extracts custom paragraph tab stops from PAPX pages", async () => {
 });
 
 test("extracts direct paragraph indents from full PAPX records", async () => {
-  const wps = readWps(await readFile("ole2-one-page.wps"));
+  const wps = readWps(await readFile(BASIC_WPS));
   assert.equal(wps.paragraphProperties[0].rightIndent, 194);
   assert.equal(wps.paragraphProperties[2].leftIndent, 1683);
   assert.equal(wps.paragraphProperties[2].rightIndent, 1853);
@@ -100,7 +105,7 @@ test("extracts direct paragraph indents from full PAPX records", async () => {
 });
 
 test("extracts section page geometry from PLCFSED/SEPX", async () => {
-  const wps = readWps(await readFile("ole2-one-page.wps"));
+  const wps = readWps(await readFile(BASIC_WPS));
   assert.equal(wps.sections.length, 2);
   assert.deepEqual(wps.sections.map((section) => [section.cpStart, section.cpEnd]), [
     [0, 254],
@@ -112,16 +117,16 @@ test("extracts section page geometry from PLCFSED/SEPX", async () => {
 });
 
 test("emits section breaks and tab stops in converted DOCX", async () => {
-  const wps = readWps(await readFile("ole2-one-page.wps"));
+  const wps = readWps(await readFile(BASIC_WPS));
   const docx = wpsToDocxBuffer(wps, { title: "test" });
   const xml = readDocxDocumentXml(docx);
   assert.match(xml, /<w:tab w:val="left" w:pos="4464"\/>/);
-  assert.match(xml, /<w:type w:val="continuous"\/><w:pgSz w:w="11910" w:h="16840"\/>/);
+  assert.match(xml, /<w:sectPr>.*<w:pgSz w:w="11910" w:h="16840"\/>/s);
   assert.match(xml, /<w:pgMar w:top="1580" w:right="1260" w:bottom="1321" w:left="1360" w:header="0" w:footer="0" w:gutter="0"\/>/);
 });
 
 test("extracts character formatting runs from CHPX pages", async () => {
-  const wps = readWps(await readFile("ole2-one-page.wps"));
+  const wps = readWps(await readFile(BASIC_WPS));
   assert.deepEqual(wps.characterRuns.slice(0, 5).map((run) => [run.cpStart, run.cpEnd]), [
     [0, 5],
     [5, 9],
@@ -136,7 +141,7 @@ test("extracts character formatting runs from CHPX pages", async () => {
 });
 
 test("extracts style sheet from STSH with names and types", async () => {
-  const wps = readWps(await readFile("ole2-one-page.wps"));
+  const wps = readWps(await readFile(BASIC_WPS));
   const styles = wps.styles.filter((s) => s !== null);
   assert.ok(styles.length >= 10);
 
@@ -166,25 +171,26 @@ test("extracts style sheet from STSH with names and types", async () => {
 });
 
 test("emits w:spacing in converted DOCX from paragraph properties", async () => {
-  const wps = readWps(await readFile("ole2-one-page.wps"));
+  const wps = readWps(await readFile(BASIC_WPS));
   const docx = wpsToDocxBuffer(wps, { title: "test" });
   const xml = readDocxDocumentXml(docx);
   assert.match(xml, /<w:spacing w:line="594" w:lineRule="exact"\/>/);
 });
 
 test("emits styles.xml with style definitions from STSH", async () => {
-  const wps = readWps(await readFile("ole2-one-page.wps"));
+  const wps = readWps(await readFile(BASIC_WPS));
   const docx = wpsToDocxBuffer(wps, { title: "test" });
   const xml = readDocxDocumentXml(docx);
-  assert.match(xml, /<w:pStyle w:val="正文文本"\/>/);
+  assert.match(xml, /<w:pStyle w:val="3"\/>/);
   assert.match(xml, /<w:rPr>.*<w:sz w:val="9"\/><w:szCs w:val="9"\/><w:w w:val="100"\/><\/w:rPr>/s);
 
   const stylesEntry = readZipEntry(docx, "word/styles.xml");
   const stylesXml = stylesEntry.toString("utf8");
-  assert.match(stylesXml, /<w:style w:type="paragraph"[^>]*w:styleId="正文"/);
-  assert.match(stylesXml, /<w:name w:val="正文"/);
-  assert.match(stylesXml, /<w:style w:type="paragraph"[^>]*w:styleId="标题1"/);
+  assert.match(stylesXml, /<w:style w:type="paragraph"[^>]*w:styleId="1"/);
+  assert.match(stylesXml, /<w:name w:val="Normal"/);
+  assert.match(stylesXml, /<w:style w:type="paragraph"[^>]*w:styleId="2"/);
+  assert.match(stylesXml, /<w:name w:val="heading 1"/);
   assert.match(stylesXml, /<w:sz w:val="44"\/><w:szCs w:val="44"\/>/);
   assert.match(stylesXml, /<w:spacing w:line="240" w:lineRule="atLeast"\/>/);
-  assert.match(stylesXml, /<w:basedOn w:val="正文"\/>/);
+  assert.match(stylesXml, /<w:basedOn w:val="1"\/>/);
 });

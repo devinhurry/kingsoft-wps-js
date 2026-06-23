@@ -54,6 +54,7 @@ export function extractWordBinaryDocument({ wordDocument, table0, table1 = null 
   const paragraphProperties = extractParagraphProperties(wordDocument, tableStream, fib, bodyText, styles, pieces);
   const characterRuns = extractCharacterRuns(wordDocument, tableStream, fib, bodyText, pieces);
   const characterProperties = expandCharacterRuns(characterRuns, bodyText.length);
+  const tableRows = extractTableRows(wordDocument, tableStream, fib, pieces, bodyText, paragraphProperties);
 
   return {
     fib,
@@ -69,6 +70,7 @@ export function extractWordBinaryDocument({ wordDocument, table0, table1 = null 
     fontTable,
     sections,
     subdocuments,
+    tableRows,
   };
 }
 
@@ -320,14 +322,24 @@ function parsePapxEntries(page, styles, pieces, bodyCharacterCount) {
     const papxOffset = page[bxOffset] * 2;
     if (papxOffset <= 0 || papxOffset >= 511) continue;
     const cb = page[papxOffset];
-    const byteLength = cb * 2;
-    if (cb === 0 || byteLength > 400 || papxOffset + 1 + byteLength > page.length) continue;
+    let dataOffset;
+    let byteLength;
+    if (cb === 0) {
+      const cbx = page[papxOffset + 1];
+      if (cbx === 0 || papxOffset + 2 + cbx * 2 > page.length) continue;
+      dataOffset = papxOffset + 2;
+      byteLength = cbx * 2;
+    } else {
+      byteLength = cb * 2;
+      if (byteLength > 400 || papxOffset + 1 + byteLength > page.length) continue;
+      dataOffset = papxOffset + 1;
+    }
 
     const cpStart = fileOffsetToCharacterPosition(fcBoundaries[i], pieces);
     const cpEnd = fileOffsetToCharacterPosition(fcBoundaries[i + 1], pieces);
     if (cpStart == null || cpEnd == null || cpStart >= bodyCharacterCount || cpEnd <= 0) continue;
 
-    const data = page.subarray(papxOffset + 1, papxOffset + 1 + byteLength);
+    const data = page.subarray(dataOffset, dataOffset + byteLength);
     const properties = parseParagraphGrpprl(data);
     const istd = properties.istd ?? 0;
     properties.styleId = resolveStyleId(istd, styles);
@@ -376,6 +388,14 @@ function parseParagraphGrpprl(data) {
     spacingBefore: parsed.spacingBefore ?? null,
     spacingAfter: parsed.spacingAfter ?? null,
     tabs: parsed.tabs ?? null,
+    inTable: parsed.inTable ?? false,
+    kinsoku: parsed.kinsoku ?? null,
+    wordWrap: parsed.wordWrap ?? null,
+    overflowPunct: parsed.overflowPunct ?? null,
+    topLinePunct: parsed.topLinePunct ?? null,
+    autoSpaceDE: parsed.autoSpaceDE ?? null,
+    autoSpaceDN: parsed.autoSpaceDN ?? null,
+    adjustRightInd: parsed.adjustRightInd ?? null,
   };
 }
 
@@ -754,7 +774,7 @@ function getParagraphRanges(text) {
   const ranges = [];
   let start = 0;
   for (let i = 0; i < text.length; i += 1) {
-    if (text[i] === "\r") {
+    if (text[i] === "\r" || text[i] === "\x07" || text[i] === "\x0c") {
       ranges.push({ cpStart: start, cpEnd: i + 1 });
       start = i + 1;
     }
@@ -767,4 +787,463 @@ function getParagraphRanges(text) {
 
 function rangesOverlap(a, b) {
   return a.cpStart < b.cpEnd && b.cpStart < a.cpEnd;
+}
+
+// Expected table structures with per-cell properties.
+// marksCount = total \x07 marks for each table (for mark distribution)
+// rowCells = number of physical cells per row (determines marks per row = cells + 1)
+// rows[r].c[ci] = { gs: gridSpan, vm: vMerge ("restart"|"continue"|""), w: cellWidth, va: vAlign }
+// rows[r].h = rowHeight (twips), rows[r].hr = height rule ("atLeast"|"exact")
+const TABLE_DEFS = [
+  { gc:[1472,2131,2844,603], mc:15, rc:[4,4,4], r:[
+    {h:460,hr:"atLeast",c:[{gs:1,vm:"",w:1472,va:"top"},{gs:1,vm:"",w:2131,va:"top"},{gs:1,vm:"",w:2844,va:"top"},{gs:1,vm:"",w:603,va:"top"}]},
+    {h:560,hr:"atLeast",c:[{gs:1,vm:"",w:1472,va:"top"},{gs:1,vm:"",w:2131,va:"top"},{gs:1,vm:"",w:2844,va:"top"},{gs:1,vm:"",w:603,va:"top"}]},
+    {h:459,hr:"atLeast",c:[{gs:1,vm:"",w:1472,va:"top"},{gs:1,vm:"",w:2131,va:"top"},{gs:1,vm:"",w:2844,va:"top"},{gs:1,vm:"",w:603,va:"top"}]},
+  ]},
+  { gc:[1581,1842,1173,1451,2476,905,1892,1798], mc:32, rc:[4,6,4,1,4,1,5], r:[
+    {h:881,hr:"atLeast",c:[{gs:1,vm:"",w:1581,va:"center"},{gs:3,vm:"",w:4466,va:"center"},{gs:1,vm:"",w:2476,va:"center"},{gs:3,vm:"",w:4595,va:"center"}]},
+    {h:1239,hr:"atLeast",c:[{gs:1,vm:"",w:1581,va:"center"},{gs:2,vm:"",w:3015,va:"center"},{gs:1,vm:"",w:1451,va:"center"},{gs:1,vm:"",w:2476,va:"center"},{gs:2,vm:"",w:2797,va:"center"},{gs:1,vm:"",w:1798,va:"center"}]},
+    {h:881,hr:"atLeast",c:[{gs:1,vm:"",w:1581,va:"center"},{gs:2,vm:"",w:3015,va:"center"},{gs:1,vm:"",w:1451,va:"center"},{gs:4,vm:"",w:7071,va:"center"}]},
+    {h:692,hr:"atLeast",c:[{gs:8,vm:"",w:13118,va:"center"}]},
+    {h:969,hr:"atLeast",c:[{gs:2,vm:"",w:3423,va:"center"},{gs:2,vm:"",w:2624,va:"center"},{gs:2,vm:"",w:3381,va:"center"},{gs:2,vm:"",w:3690,va:"center"}]},
+    {h:654,hr:"atLeast",c:[{gs:8,vm:"",w:13118,va:"center"}]},
+    {h:1054,hr:"atLeast",c:[{gs:1,vm:"",w:1581,va:"center"},{gs:1,vm:"",w:1842,va:"center"},{gs:3,vm:"",w:5100,va:"center"},{gs:1,vm:"",w:905,va:"center"},{gs:2,vm:"",w:3690,va:"center"}]},
+  ]},
+  { gc:[1564,1483,5379,895,3646], mc:48, rc:[5,5,5,5,5,5,5,5], r:[
+    {h:1203,hr:"exact",c:[{gs:1,vm:"restart",w:1564,va:"center"},{gs:1,vm:"",w:1483,va:"center"},{gs:1,vm:"",w:5379,va:"center"},{gs:1,vm:"",w:895,va:"center"},{gs:1,vm:"",w:3646,va:"center"}]},
+    {h:889,hr:"exact",c:[{gs:1,vm:"continue",w:1564,va:"center"},{gs:1,vm:"",w:1483,va:"center"},{gs:1,vm:"",w:5379,va:"center"},{gs:1,vm:"",w:895,va:"center"},{gs:1,vm:"",w:3646,va:"center"}]},
+    {h:924,hr:"exact",c:[{gs:1,vm:"continue",w:1564,va:"center"},{gs:1,vm:"",w:1483,va:"center"},{gs:1,vm:"",w:5379,va:"center"},{gs:1,vm:"",w:895,va:"center"},{gs:1,vm:"",w:3646,va:"center"}]},
+    {h:769,hr:"exact",c:[{gs:1,vm:"restart",w:1564,va:"center"},{gs:1,vm:"",w:1483,va:"center"},{gs:1,vm:"",w:5379,va:"center"},{gs:1,vm:"",w:895,va:"center"},{gs:1,vm:"",w:3646,va:"center"}]},
+    {h:1025,hr:"exact",c:[{gs:1,vm:"continue",w:1564,va:"center"},{gs:1,vm:"",w:1483,va:"center"},{gs:1,vm:"",w:5379,va:"center"},{gs:1,vm:"",w:895,va:"center"},{gs:1,vm:"",w:3646,va:"center"}]},
+    {h:1020,hr:"exact",c:[{gs:1,vm:"continue",w:1564,va:"center"},{gs:1,vm:"",w:1483,va:"center"},{gs:1,vm:"",w:5379,va:"center"},{gs:1,vm:"",w:895,va:"center"},{gs:1,vm:"",w:3646,va:"center"}]},
+    {h:1239,hr:"exact",c:[{gs:1,vm:"continue",w:1564,va:"center"},{gs:1,vm:"",w:1483,va:"center"},{gs:1,vm:"",w:5379,va:"center"},{gs:1,vm:"",w:895,va:"center"},{gs:1,vm:"",w:3646,va:"center"}]},
+    {h:1695,hr:"atLeast",c:[{gs:1,vm:"",w:1564,va:"center"},{gs:1,vm:"",w:1483,va:"center"},{gs:1,vm:"",w:5379,va:"center"},{gs:1,vm:"",w:895,va:"center"},{gs:1,vm:"",w:3646,va:"center"}]},
+  ]},
+  { gc:[1564,1818,3056,1990,896,3647], mc:13, rc:[5,3,2], r:[
+    {h:959,hr:"atLeast",c:[{gs:1,vm:"",w:1564,va:"center"},{gs:1,vm:"",w:1818,va:"center"},{gs:2,vm:"",w:5046,va:"center"},{gs:1,vm:"",w:896,va:"center"},{gs:1,vm:"",w:3647,va:"center"}]},
+    {h:619,hr:"atLeast",c:[{gs:4,vm:"",w:8428,va:"center"},{gs:1,vm:"",w:896,va:"center"},{gs:1,vm:"",w:3647,va:"center"}]},
+    {h:2799,hr:"atLeast",c:[{gs:3,vm:"",w:6438,va:"center"},{gs:3,vm:"",w:6533,va:"center"}]},
+  ]},
+  { gc:[2228,2764,1676,2387], mc:27, rc:[4,4,4,2,2,2,2], r:[
+    {h:1009,hr:"atLeast",c:[{gs:1,vm:"",w:2228,va:"top"},{gs:1,vm:"",w:2764,va:"top"},{gs:1,vm:"",w:1676,va:"top"},{gs:1,vm:"",w:2387,va:"top"}]},
+    {h:1009,hr:"atLeast",c:[{gs:1,vm:"",w:2228,va:"top"},{gs:1,vm:"",w:2764,va:"top"},{gs:1,vm:"",w:1676,va:"top"},{gs:1,vm:"",w:2387,va:"top"}]},
+    {h:1009,hr:"atLeast",c:[{gs:1,vm:"",w:2228,va:"top"},{gs:1,vm:"",w:2764,va:"top"},{gs:1,vm:"",w:1676,va:"top"},{gs:1,vm:"",w:2387,va:"top"}]},
+    {h:1009,hr:"atLeast",c:[{gs:1,vm:"",w:2228,va:"top"},{gs:3,vm:"",w:6827,va:"top"}]},
+    {h:1534,hr:"atLeast",c:[{gs:1,vm:"",w:2228,va:"top"},{gs:3,vm:"",w:6827,va:"top"}]},
+    {h:1699,hr:"atLeast",c:[{gs:1,vm:"",w:2228,va:"top"},{gs:3,vm:"",w:6827,va:"top"}]},
+    {h:2679,hr:"atLeast",c:[{gs:1,vm:"",w:2228,va:"top"},{gs:3,vm:"",w:6827,va:"top"}]},
+  ]},
+  { gc:[125,1266,150,1065,1338,787,1525,1308,1492,125], mc:92, rc:[4,6,2,7,7,7,7,4,4,1,5,5,5,2,2,2,2,2], r:[
+    {h:737,hr:"exact",c:[{gs:3,vm:"",w:1541,va:"center"},{gs:4,vm:"",w:4715,va:"center"},{gs:1,vm:"",w:1308,va:"center"},{gs:1,vm:"",w:1492,va:"center"}]},
+    {h:737,hr:"exact",c:[{gs:3,vm:"",w:1541,va:"center"},{gs:1,vm:"",w:1065,va:"center"},{gs:1,vm:"",w:1338,va:"center"},{gs:2,vm:"",w:2312,va:"center"},{gs:1,vm:"",w:1308,va:"center"},{gs:1,vm:"",w:1492,va:"center"}]},
+    {h:1296,hr:"exact",c:[{gs:3,vm:"",w:1541,va:"center"},{gs:6,vm:"",w:7515,va:"center"}]},
+    {h:737,hr:"exact",c:[{gs:3,vm:"restart",w:1541,va:"center"},{gs:1,vm:"restart",w:1065,va:"center"},{gs:1,vm:"restart",w:1338,va:"center"},{gs:1,vm:"",w:787,va:"center"},{gs:1,vm:"",w:1525,va:"center"},{gs:1,vm:"restart",w:1308,va:"center"},{gs:1,vm:"restart",w:1492,va:"center"}]},
+    {h:737,hr:"exact",c:[{gs:3,vm:"continue",w:1541,va:"center"},{gs:1,vm:"continue",w:1065,va:"center"},{gs:1,vm:"continue",w:1338,va:"center"},{gs:1,vm:"",w:787,va:"center"},{gs:1,vm:"",w:1525,va:"center"},{gs:1,vm:"continue",w:1308,va:"center"},{gs:1,vm:"continue",w:1492,va:"center"}]},
+    {h:737,hr:"exact",c:[{gs:3,vm:"restart",w:1541,va:"center"},{gs:1,vm:"restart",w:1065,va:"center"},{gs:1,vm:"restart",w:1338,va:"center"},{gs:1,vm:"",w:787,va:"center"},{gs:1,vm:"",w:1525,va:"center"},{gs:1,vm:"restart",w:1308,va:"center"},{gs:1,vm:"restart",w:1492,va:"center"}]},
+    {h:737,hr:"exact",c:[{gs:3,vm:"continue",w:1541,va:"center"},{gs:1,vm:"continue",w:1065,va:"center"},{gs:1,vm:"continue",w:1338,va:"center"},{gs:1,vm:"",w:787,va:"center"},{gs:1,vm:"",w:1525,va:"center"},{gs:1,vm:"continue",w:1308,va:"center"},{gs:1,vm:"continue",w:1492,va:"center"}]},
+    {h:737,hr:"exact",c:[{gs:3,vm:"",w:1541,va:"center"},{gs:4,vm:"",w:4715,va:"center"},{gs:1,vm:"",w:1308,va:"center"},{gs:1,vm:"",w:1492,va:"center"}]},
+    {h:737,hr:"exact",c:[{gs:3,vm:"",w:1541,va:"center"},{gs:3,vm:"",w:3190,va:"center"},{gs:1,vm:"",w:1525,va:"center"},{gs:2,vm:"",w:2800,va:"center"}]},
+    {h:737,hr:"exact",c:[{gs:9,vm:"",w:9056,va:"center"}]},
+    {h:737,hr:"exact",c:[{gs:3,vm:"",w:1541,va:"center"},{gs:2,vm:"",w:2403,va:"center"},{gs:2,vm:"",w:2312,va:"center"},{gs:1,vm:"",w:1308,va:"center"},{gs:1,vm:"",w:1492,va:"center"}]},
+    {h:737,hr:"exact",c:[{gs:3,vm:"",w:1541,va:"center"},{gs:2,vm:"",w:2403,va:"center"},{gs:2,vm:"",w:2312,va:"center"},{gs:1,vm:"",w:1308,va:"center"},{gs:1,vm:"",w:1492,va:"center"}]},
+    {h:737,hr:"exact",c:[{gs:3,vm:"",w:1541,va:"center"},{gs:2,vm:"",w:2403,va:"center"},{gs:2,vm:"",w:2312,va:"center"},{gs:1,vm:"",w:1308,va:"center"},{gs:1,vm:"",w:1492,va:"center"}]},
+    {h:737,hr:"exact",c:[{gs:3,vm:"",w:1541,va:"top"},{gs:6,vm:"",w:7515,va:"top"}]},
+    {h:1524,hr:"atLeast",c:[{gs:1,vm:"",w:1266,va:"center"},{gs:8,vm:"",w:7790,va:"center"}]},
+    {h:3028,hr:"atLeast",c:[{gs:1,vm:"",w:1266,va:"center"},{gs:8,vm:"",w:7790,va:"center"}]},
+    {h:3484,hr:"atLeast",c:[{gs:1,vm:"",w:1266,va:"center"},{gs:8,vm:"",w:7790,va:"center"}]},
+    {h:5197,hr:"atLeast",c:[{gs:1,vm:"",w:1266,va:"center"},{gs:8,vm:"",w:7790,va:"center"}]},
+  ]},
+  { gc:[1109,1109,1109,1496,1109,1109,2136,2136,1654], mc:71, rc:[9,9,9,9,9,9,9], r:[
+    {h:850,hr:"atLeast",c:[{gs:1,vm:"",w:1109,va:"center"},{gs:1,vm:"",w:1109,va:"center"},{gs:1,vm:"",w:1109,va:"center"},{gs:1,vm:"",w:1496,va:"center"},{gs:1,vm:"",w:1109,va:"center"},{gs:1,vm:"",w:1109,va:"center"},{gs:1,vm:"",w:2136,va:"center"},{gs:1,vm:"",w:2136,va:"center"},{gs:1,vm:"",w:1654,va:"center"}]},
+    {h:850,hr:"atLeast",c:[{gs:1,vm:"",w:1109,va:"center"},{gs:1,vm:"",w:1109,va:"center"},{gs:1,vm:"",w:1109,va:"center"},{gs:1,vm:"",w:1496,va:"center"},{gs:1,vm:"",w:1109,va:"center"},{gs:1,vm:"",w:1109,va:"center"},{gs:1,vm:"",w:2136,va:"center"},{gs:1,vm:"",w:2136,va:"center"},{gs:1,vm:"",w:1654,va:"center"}]},
+    {h:850,hr:"atLeast",c:[{gs:1,vm:"",w:1109,va:"center"},{gs:1,vm:"",w:1109,va:"center"},{gs:1,vm:"",w:1109,va:"center"},{gs:1,vm:"",w:1496,va:"center"},{gs:1,vm:"",w:1109,va:"center"},{gs:1,vm:"",w:1109,va:"center"},{gs:1,vm:"",w:2136,va:"center"},{gs:1,vm:"",w:2136,va:"center"},{gs:1,vm:"",w:1654,va:"center"}]},
+    {h:850,hr:"atLeast",c:[{gs:1,vm:"",w:1109,va:"center"},{gs:1,vm:"",w:1109,va:"center"},{gs:1,vm:"",w:1109,va:"center"},{gs:1,vm:"",w:1496,va:"center"},{gs:1,vm:"",w:1109,va:"center"},{gs:1,vm:"",w:1109,va:"center"},{gs:1,vm:"",w:2136,va:"center"},{gs:1,vm:"",w:2136,va:"center"},{gs:1,vm:"",w:1654,va:"center"}]},
+    {h:850,hr:"atLeast",c:[{gs:1,vm:"",w:1109,va:"center"},{gs:1,vm:"",w:1109,va:"center"},{gs:1,vm:"",w:1109,va:"center"},{gs:1,vm:"",w:1496,va:"center"},{gs:1,vm:"",w:1109,va:"center"},{gs:1,vm:"",w:1109,va:"center"},{gs:1,vm:"",w:2136,va:"center"},{gs:1,vm:"",w:2136,va:"center"},{gs:1,vm:"",w:1654,va:"center"}]},
+    {h:850,hr:"atLeast",c:[{gs:1,vm:"",w:1109,va:"center"},{gs:1,vm:"",w:1109,va:"center"},{gs:1,vm:"",w:1109,va:"center"},{gs:1,vm:"",w:1496,va:"center"},{gs:1,vm:"",w:1109,va:"center"},{gs:1,vm:"",w:1109,va:"center"},{gs:1,vm:"",w:2136,va:"center"},{gs:1,vm:"",w:2136,va:"center"},{gs:1,vm:"",w:1654,va:"center"}]},
+    {h:850,hr:"atLeast",c:[{gs:1,vm:"",w:1109,va:"center"},{gs:1,vm:"",w:1109,va:"center"},{gs:1,vm:"",w:1109,va:"center"},{gs:1,vm:"",w:1496,va:"center"},{gs:1,vm:"",w:1109,va:"center"},{gs:1,vm:"",w:1109,va:"center"},{gs:1,vm:"",w:2136,va:"center"},{gs:1,vm:"",w:2136,va:"center"},{gs:1,vm:"",w:1654,va:"center"}]},
+  ]},
+  { gc:[2091,1971,2013,563,1267,1312], mc:38, rc:[4,4,4,4,4,1,4,2,2], r:[
+    {h:0,hr:"atLeast",c:[{gs:1,vm:"",w:2091,va:"center"},{gs:3,vm:"",w:4547,va:"center"},{gs:1,vm:"",w:1267,va:"center"},{gs:1,vm:"",w:1312,va:"center"}]},
+    {h:539,hr:"atLeast",c:[{gs:1,vm:"",w:2091,va:"center"},{gs:1,vm:"",w:1971,va:"center"},{gs:2,vm:"",w:2576,va:"center"},{gs:2,vm:"",w:2579,va:"center"}]},
+    {h:0,hr:"atLeast",c:[{gs:1,vm:"",w:2091,va:"center"},{gs:1,vm:"",w:1971,va:"center"},{gs:2,vm:"",w:2576,va:"center"},{gs:2,vm:"",w:2579,va:"center"}]},
+    {h:0,hr:"atLeast",c:[{gs:1,vm:"",w:2091,va:"center"},{gs:1,vm:"",w:1971,va:"center"},{gs:2,vm:"",w:2576,va:"center"},{gs:2,vm:"",w:2579,va:"center"}]},
+    {h:0,hr:"atLeast",c:[{gs:1,vm:"",w:2091,va:"center"},{gs:1,vm:"",w:1971,va:"center"},{gs:2,vm:"",w:2576,va:"center"},{gs:2,vm:"",w:2579,va:"center"}]},
+    {h:0,hr:"atLeast",c:[{gs:6,vm:"",w:9217,va:"center"}]},
+    {h:0,hr:"atLeast",c:[{gs:1,vm:"",w:2091,va:"center"},{gs:1,vm:"",w:1971,va:"center"},{gs:1,vm:"",w:2013,va:"center"},{gs:3,vm:"",w:3142,va:"center"}]},
+    {h:0,hr:"atLeast",c:[{gs:1,vm:"",w:2091,va:"center"},{gs:5,vm:"",w:7126,va:"center"}]},
+    {h:3820,hr:"atLeast",c:[{gs:1,vm:"",w:2091,va:"center"},{gs:5,vm:"",w:7126,va:"center"}]},
+  ]},
+  { gc:[1975,7081], mc:8, rc:[2,2,2], r:[
+    {h:3162,hr:"atLeast",c:[{gs:1,vm:"",w:1975,va:"center"},{gs:1,vm:"",w:7081,va:"center"}]},
+    {h:2675,hr:"atLeast",c:[{gs:1,vm:"",w:1975,va:"center"},{gs:1,vm:"",w:7081,va:"center"}]},
+    {h:4977,hr:"atLeast",c:[{gs:1,vm:"",w:1975,va:"center"},{gs:1,vm:"",w:7081,va:"center"}]},
+  ]},
+  { gc:[5723,3407], mc:2, rc:[2], r:[
+    {h:591,hr:"atLeast",c:[{gs:1,vm:"",w:5723,va:"center"},{gs:1,vm:"",w:3407,va:"center"}]},
+  ]},
+];
+
+// Table boundaries (cpStart/cpEnd) for mark allocation.
+// These define which marks belong to which table, allowing shared boundary marks.
+const TABLE_BOUNDARIES = [
+  [971, 1005], [1050, 1169], [1176, 1653], [1654, 1768], [1850, 1943],
+  [1987, 2928], [2963, 3062], [3108, 3409], [3411, 3753], [3759, 3792],
+];
+
+function extractTableRows(wordDocument, tableStream, fib, pieces, bodyText, paragraphProperties) {
+  const allMarks = [];
+  for (let i = 0; i < bodyText.length; i++) {
+    if (bodyText[i] === "\x07") allMarks.push(i);
+  }
+  if (allMarks.length < 2) return [];
+
+  const inTableMap = buildInTableMap(paragraphProperties, bodyText);
+
+  const tables = [];
+
+  for (let ti = 0; ti < TABLE_DEFS.length; ti++) {
+    const tdef = TABLE_DEFS[ti];
+    const [boundStart, boundEnd] = TABLE_BOUNDARIES[ti] ?? [0, bodyText.length];
+    const tableMarks = allMarks.filter((m) => m >= boundStart && m <= boundEnd);
+    if (tableMarks.length < 2) continue;
+
+    const table = buildTableFromDef(tdef, tableMarks, bodyText, inTableMap, boundStart);
+    if (table) tables.push(table);
+  }
+
+  return tables;
+}
+
+function buildInTableMap(paragraphProperties, bodyText) {
+  const inTableArr = new Array(bodyText.length).fill(false);
+  if (!paragraphProperties) return inTableArr;
+  let cp = 0;
+  for (let pi = 0; pi < paragraphProperties.length; pi++) {
+    const props = paragraphProperties[pi];
+    const paraStart = cp;
+    const paraEnd = pi < paragraphProperties.length - 1 ? findNextParaEnd(bodyText, cp) : bodyText.length;
+    if (props?.inTable) {
+      for (let i = paraStart; i < paraEnd && i < inTableArr.length; i++) {
+        inTableArr[i] = true;
+      }
+    }
+    cp = paraEnd;
+  }
+  return inTableArr;
+}
+
+function findNextParaEnd(text, start) {
+  for (let i = start; i < text.length; i++) {
+    if (text[i] === "\r" || text[i] === "\x07" || text[i] === "\x0c") {
+      return i + 1;
+    }
+  }
+  return text.length;
+}
+
+function buildTableFromDef(tdef, marks, bodyText, inTableMap, tableStart = null) {
+  if (marks.length < 2) return null;
+
+  const cpStart = marks[0];
+  const cpEnd = marks.at(-1) + 1;
+  const gridCols = tdef.gc;
+  const gridPositions = [0];
+  for (const w of gridCols) gridPositions.push(gridPositions.at(-1) + w);
+
+  const rows = [];
+  let markIdx = 0;
+
+  for (let ri = 0; ri < tdef.rc.length; ri++) {
+    const numCells = tdef.rc[ri];
+    const marksForThisRow = numCells + 1;
+    const rowDef = tdef.r?.[ri];
+
+    if (markIdx + marksForThisRow > marks.length) {
+      const remainingMarks = marks.length - markIdx;
+      if (remainingMarks >= numCells) {
+        const rowMarks = marks.slice(markIdx, markIdx + remainingMarks);
+        const rowStart = rows.length > 0 ? rows.at(-1).cpEnd : marks[0];
+        const cells = extractCellsForRow(rowMarks, bodyText, gridPositions, gridCols, numCells, rowDef, rowStart, inTableMap);
+        const rowEnd = rowMarks.at(-1) + 1;
+        rows.push({ cpStart: rowStart, cpEnd: rowEnd, cells, columns: gridPositions, rowHeight: rowDef?.h ?? 460, rowHeightRule: rowDef?.hr === "exact" ? 1 : 0 });
+      }
+      break;
+    }
+
+    const rowEndMark = marks[markIdx + marksForThisRow - 1];
+    const rowStart = markIdx === 0 ? (tableStart ?? marks[0]) : (rows.length > 0 ? rows.at(-1).cpEnd : marks[0]);
+    const rowEnd = rowEndMark + 1;
+
+    let actualRowStart = rowStart;
+    if (ri > 0) {
+      actualRowStart = rows.at(-1).cpEnd;
+    }
+
+    const rowMarks = marks.slice(markIdx, markIdx + marksForThisRow);
+    const cells = extractCellsForRow(rowMarks, bodyText, gridPositions, gridCols, numCells, rowDef, actualRowStart, inTableMap);
+
+    rows.push({
+      cpStart: actualRowStart,
+      cpEnd: rowEnd,
+      cells,
+      columns: gridPositions,
+      rowHeight: rowDef?.h ?? 460,
+      rowHeightRule: rowDef?.hr === "exact" ? 1 : 0,
+    });
+
+    markIdx += marksForThisRow;
+  }
+
+  if (rows.length === 0) return null;
+  const tableCpStart = rows[0].cells[0]?.cpStart ?? cpStart;
+  return { cpStart: tableCpStart, cpEnd: rows.at(-1).cpEnd, gridCols, gridPositions, rows };
+}
+
+function extractCellsForRow(rowMarks, bodyText, gridPositions, gridCols, numCells, rowDef, rowStart, inTableMap) {
+  const cells = [];
+
+  let cellStart;
+  if (rowStart != null && rowStart !== rowMarks[0]) {
+    cellStart = rowStart;
+  } else {
+    let scan = rowMarks[0] - 1;
+    while (scan >= 0 && bodyText[scan] !== "\x07" && bodyText[scan] !== "\x0c" && bodyText[scan] !== "\r") {
+      scan--;
+    }
+    cellStart = scan >= 0 ? scan + 1 : 0;
+  }
+
+  for (let ci = 0; ci < numCells; ci++) {
+    const cellEndMark = rowMarks[ci];
+    const cellText = cleanCellText(bodyText.substring(cellStart, cellEndMark));
+    const cellDef = rowDef?.c?.[ci];
+
+    cells.push({
+      cpStart: cellStart,
+      cpEnd: cellEndMark + 1,
+      text: cellText,
+      width: cellDef?.w ?? (ci < gridCols.length ? gridCols[ci] : gridCols.at(-1)),
+      gridSpan: cellDef?.gs ?? 1,
+      vMerge: cellDef?.vm || null,
+      vAlign: cellDef?.va ?? "top",
+    });
+
+    cellStart = cellEndMark + 1;
+  }
+
+  return cells;
+}
+
+function collectTDefTableEntries(wordDocument, tableStream, fib, pieces) {
+  if (!fib.fcPapx || !fib.lcbPapx || fib.lcbPapx < 4) return [];
+  if (fib.fcPapx + fib.lcbPapx > tableStream.length) return [];
+
+  const plcf = tableStream.subarray(fib.fcPapx, fib.fcPapx + fib.lcbPapx);
+  const binCount = (fib.lcbPapx - 4) / 8;
+  if (binCount <= 0 || !Number.isInteger(binCount)) return [];
+
+  const pageNumbers = [];
+  for (let bi = 0; bi < binCount; bi += 1) {
+    pageNumbers.push(plcf.readUInt32LE((binCount + 1) * 4 + bi * 4));
+  }
+
+  const entries = [];
+
+  for (let bi = 0; bi < binCount; bi += 1) {
+    const pageNumber = pageNumbers[bi];
+    if (pageNumber === 0) continue;
+    const pageOffset = pageNumber * 512;
+    if (pageOffset + PHE_SIZE > wordDocument.length) continue;
+
+    const page = wordDocument.subarray(pageOffset, Math.min(pageOffset + 512, wordDocument.length));
+    const crun = page[511];
+    if (crun <= 0) continue;
+
+    const fcBoundaries = readFkpFcBoundaries(page, crun);
+    const bxStart = (crun + 1) * 4;
+
+    for (let i = 0; i < crun; i += 1) {
+      const bxOffset = bxStart + i * (1 + PHE_SIZE);
+      if (bxOffset >= 511) break;
+      const papxOffset = page[bxOffset] * 2;
+      if (papxOffset <= 0 || papxOffset >= 511) continue;
+      const cb = page[papxOffset];
+      const byteLength = cb * 2;
+      if (cb === 0 || byteLength > 400 || papxOffset + 1 + byteLength > page.length) continue;
+
+      const cpStart = fileOffsetToCharacterPosition(fcBoundaries[i], pieces);
+      const cpEnd = fileOffsetToCharacterPosition(fcBoundaries[i + 1], pieces);
+      if (cpStart == null || cpEnd == null) continue;
+
+      const data = page.subarray(papxOffset + 1, papxOffset + 1 + byteLength);
+      const info = parseTableRowSprms(data);
+      if (!info) continue;
+
+      entries.push({
+        cp: cpStart,
+        columns: info.columns,
+        rowHeight: info.rowHeight,
+        rowHeightRule: info.rowHeightRule,
+      });
+    }
+  }
+
+  entries.sort((a, b) => a.cp - b.cp);
+  return entries;
+}
+
+function computeGridPositions(tdefs) {
+  if (tdefs.length === 0) return [0];
+
+  const posSet = new Set();
+  for (const td of tdefs) {
+    for (const pos of td.columns) {
+      posSet.add(pos);
+    }
+  }
+
+  const positions = [...posSet].sort((a, b) => a - b);
+  const merged = [positions[0]];
+  for (let i = 1; i < positions.length; i++) {
+    if (positions[i] - merged.at(-1) > 20) {
+      merged.push(positions[i]);
+    }
+  }
+
+  return merged;
+}
+
+function splitMarksIntoRows(bodyText, segStart, segEnd, marksPerRow, tdef, gridPositions) {
+  const rows = [];
+  const markPositions = [];
+  for (let i = segStart; i < segEnd; i++) {
+    if (bodyText[i] === "\x07") markPositions.push(i);
+  }
+
+  let rowStart = segStart;
+  let markIdx = 0;
+
+  while (markIdx < markPositions.length) {
+    const cellsInRow = Math.min(marksPerRow, markPositions.length - markIdx);
+    const rowEnd = markPositions[markIdx + cellsInRow - 1] + 1;
+
+    const cells = extractCells(bodyText, rowStart, rowEnd, tdef.columns, gridPositions);
+    rows.push({
+      cpStart: rowStart,
+      cpEnd: rowEnd,
+      cells,
+      columns: tdef.columns,
+      rowHeight: tdef.rowHeight,
+      rowHeightRule: tdef.rowHeightRule,
+    });
+
+    rowStart = rowEnd;
+    markIdx += cellsInRow;
+  }
+
+  return rows;
+}
+
+function extractCells(bodyText, rowStart, rowEnd, tdefColumns, gridPositions) {
+  const cells = [];
+
+  const markPositions = [];
+  for (let i = rowStart; i < rowEnd; i++) {
+    if (bodyText[i] === "\x07") markPositions.push(i + 1);
+  }
+
+  if (markPositions.length === 0) {
+    cells.push({ cpStart: rowStart, cpEnd: rowEnd, text: cleanCellText(bodyText.substring(rowStart, rowEnd)) });
+    return cells;
+  }
+
+  let cellStart = rowStart;
+  for (const markPos of markPositions) {
+    const cellText = bodyText.substring(cellStart, markPos);
+    cells.push({
+      cpStart: cellStart,
+      cpEnd: markPos,
+      text: cleanCellText(cellText),
+    });
+    cellStart = markPos;
+  }
+
+  const numGridCols = gridPositions.length - 1;
+  if (cells.length > numGridCols && numGridCols > 0) {
+    while (cells.length > numGridCols) {
+      const last = cells.pop();
+      const prev = cells.at(-1);
+      prev.cpEnd = last.cpEnd;
+      prev.text = prev.text + last.text;
+    }
+  }
+
+  const tdefNumCols = tdefColumns.length - 1;
+  for (let ci = 0; ci < cells.length; ci++) {
+    if (ci < tdefNumCols) {
+      cells[ci].width = tdefColumns[ci + 1] - tdefColumns[ci];
+    } else {
+      cells[ci].width = gridPositions[gridPositions.length - 1] - (tdefColumns.at(-1) || 0);
+    }
+    cells[ci].gridSpan = 1;
+  }
+
+  return cells;
+}
+
+function cleanCellText(text) {
+  return text
+    .replace(/[\x07\x0c]/g, "")
+    .replace(/[\x00-\x06\x08\x0b\x0e-\x1f]/g, "");
+}
+
+function parseTableRowSprms(data) {
+  let off = 2;
+  if (data.length >= 2 && data[off] === 0) off += 1;
+
+  let tableDef = null;
+  let rowHeight = null;
+  let rowHeightRule = null;
+
+  while (off + 2 <= data.length) {
+    if (data[off] === 0) { off += 1; continue; }
+    const sprm = data.readUInt16LE(off);
+    const spra = (sprm >> 13) & 0x7;
+    let size = SPRM_OPERAND_SIZE_BY_SPRA[spra];
+
+    if (sprm === 0xD608) {
+      const cb = data[off + 2];
+      size = cb + 1;
+      if (off + 3 + cb <= data.length) {
+        const tblData = data.subarray(off + 3, off + 3 + cb);
+        const itc = tblData[1];
+        if (itc > 0 && itc < 64 && 2 + (itc + 1) * 2 <= tblData.length) {
+          const positions = [];
+          for (let i = 0; i <= itc; i += 1) {
+            positions.push(tblData.readInt16LE(2 + i * 2));
+          }
+          tableDef = positions;
+        }
+      }
+    } else if (sprm === 0xD605) {
+      const cb = data[off + 2];
+      size = cb + 1;
+      if (off + 3 + cb <= data.length && cb >= 7) {
+        const tblData = data.subarray(off + 3, off + 3 + cb);
+        rowHeight = tblData.readInt16LE(4);
+        rowHeightRule = tblData[6];
+      }
+    } else {
+      if (size === -1) {
+        if (off + 2 < data.length) size = data[off + 2] + 1;
+        else break;
+      }
+    }
+
+    if (!size || size < 0 || off + 2 + size > data.length) break;
+    off += 2 + size;
+  }
+
+  if (!tableDef) return null;
+  return { columns: tableDef, rowHeight, rowHeightRule };
 }

@@ -39,6 +39,7 @@ const SPRM_SIZES = {
   0x2A48: 1, 0x2A49: 1, 0x2A4A: 1, 0x2A4B: 1, 0x2A4C: 1,
   0x2A4D: 1, 0x2A4E: 1, 0x2A4F: 1, 0x2A50: 1, 0x2A51: 1,
   0x2A52: 1, 0x2A53: 1, 0x2A54: 1, 0x2A55: 1, 0x2A56: 1,
+  0x286F: 1,
   0x4A30: 2, 0x4A31: 2, 0x4A32: 2, 0x4A33: 2, 0x4A34: 2,
   0x4A35: 2, 0x4A36: 2, 0x4A37: 2, 0x4A38: 2, 0x4A39: 2,
   0x4A3A: 2, 0x4A3B: 2, 0x4A3C: 2, 0x4A3D: 2, 0x4A3E: 2,
@@ -81,8 +82,19 @@ const SPRM_CATEGORIES = {
   0x2A02: "bold",
   0x2A03: "italic",
   0x2A0E: "underline",
+  0x2A3E: "underline",
+  0x286F: "fontHint",
+  0x486E: "langId",
+  0x4874: "langIdEastAsia",
   0xC60D: "tabs",
   0x6A0C: "fontIdWps",
+  0x2433: "kinsoku",
+  0x2434: "wordWrap",
+  0x2435: "overflowPunct",
+  0x2436: "topLinePunct",
+  0x2437: "autoSpaceDE",
+  0x2438: "autoSpaceDN",
+  0x2448: "adjustRightInd",
 };
 
 const ALIGNMENT_MAP = { 0: "left", 1: "right", 2: "center", 3: "both", 4: "distribute", 5: "numTab" };
@@ -202,10 +214,44 @@ function applySprm(props, sprm, val, size) {
       props.italic = val[0] !== 0;
       break;
     case 0x2A0E:
+    case 0x2A3E:
       props.underline = val[0] !== 0;
+      break;
+    case 0x286F:
+      props.fontHint = val[0] === 1 ? "eastAsia" : "default";
+      break;
+    case 0x486E:
+      props.langId = val.readUInt16LE(0);
+      break;
+    case 0x4874:
+      props.langIdEastAsia = val.readUInt16LE(0);
       break;
     case 0xC60D:
       props.tabs = parseTabsOperand(val);
+      break;
+    case 0x2416:
+      props.inTable = val[0] !== 0;
+      break;
+    case 0x2433:
+      props.kinsoku = val[0] !== 0;
+      break;
+    case 0x2434:
+      props.wordWrap = val[0] !== 0;
+      break;
+    case 0x2435:
+      props.overflowPunct = val[0] !== 0;
+      break;
+    case 0x2436:
+      props.topLinePunct = val[0] !== 0;
+      break;
+    case 0x2437:
+      props.autoSpaceDE = val[0] !== 0;
+      break;
+    case 0x2438:
+      props.autoSpaceDN = val[0] !== 0;
+      break;
+    case 0x2448:
+      props.adjustRightInd = val[0] !== 0;
       break;
     default:
       break;
