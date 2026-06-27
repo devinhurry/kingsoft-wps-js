@@ -1638,27 +1638,29 @@ function shouldEmitCustomStyleAttr(style, builtIn) {
   return Number.isInteger(id) && id >= 13 && style.name !== "List Paragraph";
 }
 
+const STYLE_NAMES_BY_STI = ["Normal","heading 1","heading 2","heading 3","heading 4","heading 5","heading 6","heading 7","heading 8","heading 9","index 1","index 2","index 3","index 4","index 5","index 6","index 7","index 8","index 9","toc 1","toc 2","toc 3","toc 4","toc 5","toc 6","toc 7","toc 8","toc 9","Normal Indent","footnote text","annotation text","header","footer","index heading","caption","table of figures","envelope address","envelope return","footnote reference","annotation reference","line number","page number","endnote reference","endnote text","table of authorities","macro","toa heading","List","List Bullet","List Number","List 2","List 3","List 4","List 5","List Bullet 2","List Bullet 3","List Bullet 4","List Bullet 5","List Number 2","List Number 3","List Number 4","List Number 5","Title","Closing","Signature","Default Paragraph Font","Body Text","Body Text Indent","List Continue","List Continue 2","List Continue 3","List Continue 4","List Continue 5","Message Header","Subtitle","Salutation","Date","Body Text First Indent","Body Text First Indent 2","Note Heading","Body Text 2","Body Text 3","Body Text Indent 2","Body Text Indent 3","Block Text","Hyperlink","FollowedHyperlink","Strong","Emphasis","Document Map","Plain Text","E-mail Signature","Normal (Web)","HTML Acronym","HTML Address","HTML Cite","HTML Code","HTML Definition","HTML Keyboard","HTML Preformatted","HTML Sample","HTML Typewriter","HTML Variable","Normal Table","annotation subject","Table Simple 1","Table Simple 2","Table Simple 3","Table Classic 1","Table Classic 2","Table Classic 3","Table Classic 4","Table Colorful 1","Table Colorful 2","Table Colorful 3","Table Columns 1","Table Columns 2","Table Columns 3","Table Columns 4","Table Columns 5","Table Grid 1","Table Grid 2","Table Grid 3","Table Grid 4","Table Grid 5","Table Grid 6","Table Grid 7","Table Grid 8","Table List 1","Table List 2","Table List 3","Table List 4","Table List 5","Table List 6","Table List 7","Table List 8","Table 3D effects 1","Table 3D effects 2","Table 3D effects 3","Table Contemporary","Table Elegant","Table Professional","Table Subtle 1","Table Subtle 2","Table Web 1","Table Web 2","Table Web 3","Balloon Text","Table Grid","Table Theme","Light Shading","Light List","Light Grid","Medium Shading 1","Medium Shading 2","Medium List 1","Medium List 2","Medium Grid 1","Medium Grid 2","Medium Grid 3","Dark List","Colorful Shading","Colorful List","Colorful Grid","Light Shading Accent 1","Light List Accent 1","Light Grid Accent 1","Medium Shading 1 Accent 1","Medium Shading 2 Accent 1","Medium List 1 Accent 1","List Paragraph","Medium List 2 Accent 1","Medium Grid 1 Accent 1","Medium Grid 2 Accent 1","Medium Grid 3 Accent 1","Dark List Accent 1","Colorful Shading Accent 1","Colorful List Accent 1","Colorful Grid Accent 1","Light Shading Accent 2","Light List Accent 2","Light Grid Accent 2","Medium Shading 1 Accent 2","Medium Shading 2 Accent 2","Medium List 1 Accent 2","Medium List 2 Accent 2","Medium Grid 1 Accent 2","Medium Grid 2 Accent 2","Medium Grid 3 Accent 2","Dark List Accent 2","Colorful Shading Accent 2","Colorful List Accent 2","Colorful Grid Accent 2","Light Shading Accent 3","Light List Accent 3","Light Grid Accent 3","Medium Shading 1 Accent 3","Medium Shading 2 Accent 3","Medium List 1 Accent 3","Medium List 2 Accent 3","Medium Grid 1 Accent 3","Medium Grid 2 Accent 3","Medium Grid 3 Accent 3","Dark List Accent 3","Colorful Shading Accent 3","Colorful List Accent 3","Colorful Grid Accent 3","Light Shading Accent 4","Light List Accent 4","Light Grid Accent 4","Medium Shading 1 Accent 4","Medium Shading 2 Accent 4","Medium List 1 Accent 4","Medium List 2 Accent 4","Medium Grid 1 Accent 4","Medium Grid 2 Accent 4","Medium Grid 3 Accent 4","Dark List Accent 4","Colorful Shading Accent 4","Colorful List Accent 4","Colorful Grid Accent 4","Light Shading Accent 5","Light List Accent 5","Light Grid Accent 5","Medium Shading 1 Accent 5","Medium Shading 2 Accent 5","Medium List 1 Accent 5","Medium List 2 Accent 5","Medium Grid 1 Accent 5","Medium Grid 2 Accent 5","Medium Grid 3 Accent 5","Dark List Accent 5","Colorful Shading Accent 5","Colorful List Accent 5","Colorful Grid Accent 5","Light Shading Accent 6","Light List Accent 6","Light Grid Accent 6","Medium Shading 1 Accent 6","Medium Shading 2 Accent 6","Medium List 1 Accent 6","Medium List 2 Accent 6","Medium Grid 1 Accent 6","Medium Grid 2 Accent 6","Medium Grid 3 Accent 6","Dark List Accent 6","Colorful Shading Accent 6","Colorful List Accent 6","Colorful Grid Accent 6"];
+
 function buildLatentStylesXml(styles = [], wpsDocument = {}) {
-  // Generate latent styles from parsed latentLsd (MS-DOC LSD array)
+  // Generate latent styles for all 260 built-in styles (MS-DOC LSD array).
+  // STYLE_NAMES_BY_STI provides the built-in style name for each sti index.
   const latentLsd = wpsDocument.latentLsd ?? [];
-  if (!latentLsd || latentLsd.length === 0) {
-    return '<w:latentStyles w:count="260" w:defQFormat="0" w:defUnhideWhenUsed="1" w:defSemiHidden="1" w:defUIPriority="99" w:defLockedState="0"/>';
-  }
   const parts = ['<w:latentStyles w:count="260" w:defQFormat="0" w:defUnhideWhenUsed="1" w:defSemiHidden="1" w:defUIPriority="99" w:defLockedState="0">'];
-  for (const style of styles) {
-    if (!style || !style.latent || !style.name) continue;
-    const l = style.latent;
+  for (let sti = 0; sti < STYLE_NAMES_BY_STI.length; sti += 1) {
+    const name = STYLE_NAMES_BY_STI[sti];
+    const latent = latentLsd[sti];
+    if (!latent || !name) continue;
     const attrs = [];
-    if (l.fQFormat) attrs.push('w:qFormat="1"');
-    if (!l.fUnhideWhenUsed) attrs.push('w:unhideWhenUsed="0"');
-    attrs.push('w:uiPriority="' + l.iPriority + '"');
-    if (l.fSemiHidden) attrs.push('w:semiHidden="1"');
-    const name = escapeXml(style.name);
+    if (latent.fQFormat) attrs.push('w:qFormat="1"');
+    if (!latent.fUnhideWhenUsed) attrs.push('w:unhideWhenUsed="0"');
+    attrs.push('w:uiPriority="' + latent.iPriority + '"');
+    if (!latent.fSemiHidden) attrs.push('w:semiHidden="0"');
     parts.push('<w:lsdException ' + attrs.join(" ") + ' w:name="' + name + '"/>');
   }
   parts.push('</w:latentStyles>');
   return parts.join("");
-}function splitTabs(value) {
+}
+
+function splitTabs(value) {
   const parts = [];
   let start = 0;
   for (let i = 0; i < value.length; i += 1) {
