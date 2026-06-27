@@ -23,6 +23,7 @@ const FIB_FC_LCB_START = 0x9a;
 const FIB_FC_LCB_COUNT_OFFSET = 0x98;
 const FIB_FC_CLX_INDEX = 33;
 const FIB_FC_PLCFSED_INDEX = 6;
+const FIB_FC_PLCFHDD_INDEX = 8;
 const FIB_FC_PAPX_INDEX = 13;
 const FIB_FC_STSH_INDEX = 1;
 const FIB_FC_FONT_TABLE_INDEX = 15;
@@ -59,6 +60,7 @@ export function extractWordBinaryDocument({ wordDocument, table0, table1 = null,
   const fontTable = extractFontTable(tableStream, fib);
   const sections = extractSections(wordDocument, tableStream, fib);
   const defaultTabStop = inferDefaultTabStop(sections);
+  const plcfHdd = parsePlcfHdd(tableStream, fib);
   const paragraphProperties = extractParagraphProperties(wordDocument, tableStream, fib, bodyText, styles, pieces);
   const characterRuns = extractCharacterRuns(wordDocument, tableStream, fib, bodyText, pieces);
   const characterProperties = expandCharacterRuns(characterRuns, bodyText.length);
@@ -81,6 +83,7 @@ export function extractWordBinaryDocument({ wordDocument, table0, table1 = null,
     defaultTabStop,
     subdocuments,
     tableRows,
+    plcfHdd,
   };
 }
 
@@ -104,6 +107,7 @@ function readFib(wordDocument) {
   const fcLcbCount = wordDocument.readUInt16LE(FIB_FC_LCB_COUNT_OFFSET);
   const tableStreamOffset = FIB_FC_LCB_START + FIB_FC_CLX_INDEX * 8;
   const plcfSedOffset = FIB_FC_LCB_START + FIB_FC_PLCFSED_INDEX * 8;
+  const plcfHddOffset = FIB_FC_LCB_START + FIB_FC_PLCFHDD_INDEX * 8;
   const papxOffset = FIB_FC_LCB_START + FIB_FC_PAPX_INDEX * 8;
   const chpxOffset = FIB_FC_LCB_START + FIB_FC_CHPX_INDEX * 8;
   const fontTableOffset = FIB_FC_LCB_START + FIB_FC_FONT_TABLE_INDEX * 8;
@@ -122,6 +126,8 @@ function readFib(wordDocument) {
     lcbClx: wordDocument.readUInt32LE(tableStreamOffset + 4),
     fcPlcfSed: wordDocument.readUInt32LE(plcfSedOffset),
     lcbPlcfSed: wordDocument.readUInt32LE(plcfSedOffset + 4),
+    fcPlcfHdd: wordDocument.readUInt32LE(plcfHddOffset),
+    lcbPlcfHdd: wordDocument.readUInt32LE(plcfHddOffset + 4),
     fcPapx: wordDocument.readUInt32LE(papxOffset),
     lcbPapx: wordDocument.readUInt32LE(papxOffset + 4),
     fcChpx: wordDocument.readUInt32LE(chpxOffset),
@@ -279,6 +285,32 @@ function inferDefaultTabStop(sections) {
   }
 
   return 720;
+}
+
+function parsePlcfHdd(tableStream, fib) {
+  // PlcfHdd is a PLC (CP array, no data entries) in the table stream.
+  // It indexes stories in the header subdocument:
+  //   First 0-6 entries: footnote/endnote separators
+  //   Then groups of up to 6 entries per section (even/odd header/footer, first header/footer)
+  if (!fib.fcPlcfHdd || !fib.lcbPlcfHdd || fib.lcbPlcfHdd < 4) {
+    return { cpArray: [], separatorCount: 6 };
+  }
+  if (fib.fcPlcfHdd + fib.lcbPlcfHdd > tableStream.length) {
+    return { cpArray: [], separatorCount: 6 };
+  }
+
+  const plcf = tableStream.subarray(fib.fcPlcfHdd, fib.fcPlcfHdd + fib.lcbPlcfHdd);
+  const cpCount = fib.lcbPlcfHdd / 4;
+  if (cpCount < 2) {
+    return { cpArray: [], separatorCount: 6 };
+  }
+
+  const cpArray = [];
+  for (let i = 0; i < cpCount; i += 1) {
+    cpArray.push(plcf.readUInt32LE(i * 4));
+  }
+  // MS-DOC: the first 6 separators (footnote/endnote) always exist
+  return { cpArray, separatorCount: 6 };
 }
 
 function extractParagraphProperties(wordDocument, tableStream, fib, bodyText, styles, pieces) {
@@ -813,6 +845,12 @@ function applySectionSprm(props, sprm, val) {
       break;
     case 0x300a:
       props.titlePg = val[0] !== 0;
+      break;
+    case 0x3014:
+      // sprmSGprfIhdt — header/footer story flags per section (MS-DOC §2.6.3)
+      // Bits: 0x01=evenHeader, 0x02=oddHeader, 0x04=evenFooter, 0x08=oddFooter,
+      //       0x10=firstHeader, 0x20=firstFooter
+      props.grpfIhdt = val[0];
       break;
     case 0x501c:
       props.pageNumberStart = val.readUInt16LE(0);
