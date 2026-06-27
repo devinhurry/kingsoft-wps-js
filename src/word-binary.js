@@ -1,10 +1,6 @@
 import { parseSprms } from "./sprm.js";
-import {
-  getBuiltInStyleDefinitionByRawName,
-  resolveStyleIdFromRawName,
-  resolveStyleNameFromRawName,
-  resolveStyleTypeFromSgc,
-} from "./style-defs.js";
+// sti→name mapping per MS-OI29500 §2.1.237 (Part 1 Section 17.7.4.9)
+export const STI_NAMES = ["Normal","heading 1","heading 2","heading 3","heading 4","heading 5","heading 6","heading 7","heading 8","heading 9","index 1","index 2","index 3","index 4","index 5","index 6","index 7","index 8","index 9","toc 1","toc 2","toc 3","toc 4","toc 5","toc 6","toc 7","toc 8","toc 9","Normal Indent","footnote text","annotation text","header","footer","index heading","caption","table of figures","envelope address","envelope return","footnote reference","annotation reference","line number","page number","endnote reference","endnote text","table of authorities","macro","toa heading","List","List Bullet","List Number","List 2","List 3","List 4","List 5","List Bullet 2","List Bullet 3","List Bullet 4","List Bullet 5","List Number 2","List Number 3","List Number 4","List Number 5","Title","Closing","Signature","Default Paragraph Font","Body Text","Body Text Indent","List Continue","List Continue 2","List Continue 3","List Continue 4","List Continue 5","Message Header","Subtitle","Salutation","Date","Body Text First Indent","Body Text First Indent 2","Note Heading","Body Text 2","Body Text 3","Body Text Indent 2","Body Text Indent 3","Block Text","Hyperlink","FollowedHyperlink","Strong","Emphasis","Document Map","Plain Text","E-mail Signature","HTML Top of Form","HTML Bottom of Form","Normal (Web)","HTML Acronym","HTML Address","HTML Cite","HTML Code","HTML Definition","HTML Keyboard","HTML Preformatted","HTML Sample","HTML Typewriter","HTML Variable","Normal Table","annotation subject","No List","Outline List 1","Outline List 2","Outline List 3","Table Simple 1","Table Simple 2","Table Simple 3","Table Classic 1","Table Classic 2","Table Classic 3","Table Classic 4","Table Colorful 1","Table Colorful 2","Table Colorful 3","Table Columns 1","Table Columns 2","Table Columns 3","Table Columns 4","Table Columns 5","Table Grid 1","Table Grid 2","Table Grid 3","Table Grid 4","Table Grid 5","Table Grid 6","Table Grid 7","Table Grid 8","Table List 1","Table List 2","Table List 3","Table List 4","Table List 5","Table List 6","Table List 7","Table List 8","Table 3D effects 1","Table 3D effects 2","Table 3D effects 3","Table Contemporary","Table Elegant","Table Professional","Table Subtle 1","Table Subtle 2","Table Web 1","Table Web 2","Table Web 3","Balloon Text","Table Grid","Table Theme","Placeholder Text","No Spacing","Light Shading","Light List","Light Grid","Medium Shading 1","Medium Shading 2","Medium List 1","Medium List 2","Medium Grid 1","Medium Grid 2","Medium Grid 3","Dark List","Colorful Shading","Colorful List","Colorful Grid","Light Shading Accent 1","Light List Accent 1","Light Grid Accent 1","Medium Shading 1 Accent 1","Medium Shading 2 Accent 1","Medium List 1 Accent 1","Revision","List Paragraph","Quote","Intense Quote","Medium List 2 Accent 1","Medium Grid 1 Accent 1","Medium Grid 2 Accent 1","Medium Grid 3 Accent 1","Dark List Accent 1","Colorful Shading Accent 1","Colorful List Accent 1","Colorful Grid Accent 1","Light Shading Accent 2","Light List Accent 2","Light Grid Accent 2","Medium Shading 1 Accent 2","Medium Shading 2 Accent 2","Medium List 1 Accent 2","Medium List 2 Accent 2","Medium Grid 1 Accent 2","Medium Grid 2 Accent 2","Medium Grid 3 Accent 2","Dark List Accent 2","Colorful Shading Accent 2","Colorful List Accent 2","Colorful Grid Accent 2","Light Shading Accent 3","Light List Accent 3","Light Grid Accent 3","Medium Shading 1 Accent 3","Medium Shading 2 Accent 3","Medium List 1 Accent 3","Medium List 2 Accent 3","Medium Grid 1 Accent 3","Medium Grid 2 Accent 3","Medium Grid 3 Accent 3","Dark List Accent 3","Colorful Shading Accent 3","Colorful List Accent 3","Colorful Grid Accent 3","Light Shading Accent 4","Light List Accent 4","Light Grid Accent 4","Medium Shading 1 Accent 4","Medium Shading 2 Accent 4","Medium List 1 Accent 4","Medium List 2 Accent 4","Medium Grid 1 Accent 4","Medium Grid 2 Accent 4","Medium Grid 3 Accent 4","Dark List Accent 4","Colorful Shading Accent 4","Colorful List Accent 4","Colorful Grid Accent 4","Light Shading Accent 5","Light List Accent 5","Light Grid Accent 5","Medium Shading 1 Accent 5","Medium Shading 2 Accent 5","Medium List 1 Accent 5","Medium List 2 Accent 5","Medium Grid 1 Accent 5","Medium Grid 2 Accent 5","Medium Grid 3 Accent 5","Dark List Accent 5","Colorful Shading Accent 5","Colorful List Accent 5","Colorful Grid Accent 5","Light Shading Accent 6","Light List Accent 6","Light Grid Accent 6","Medium Shading 1 Accent 6","Medium Shading 2 Accent 6","Medium List 1 Accent 6","Medium List 2 Accent 6","Medium Grid 1 Accent 6","Medium Grid 2 Accent 6","Medium Grid 3 Accent 6","Dark List Accent 6","Colorful Shading Accent 6","Colorful List Accent 6","Colorful Grid Accent 6"];
 
 const WORD_BINARY_MAGIC = 0xa5ec;
 const FIB_FLAGS_OFFSET = 0x0a;
@@ -480,12 +476,22 @@ const STYLE_TYPE_CHARACTER = "character";
 const STYLE_TYPE_TABLE = "table";
 const STYLE_TYPE_LIST = "list";
 
-function buildStyleId(name, index) {
-  return resolveStyleIdFromRawName(name, index);
+function buildStyleId(sti, index, styles) {
+  // styleId is sequential (index+1) so paragraph property istd references match
+  return String(index + 1);
 }
 
-function buildStyleName(name) {
-  return resolveStyleNameFromRawName(name);
+function buildStyleName(sti, name) {
+  // MS-OI29500: English name from sti; fall back to raw name for custom styles
+  if (sti < STI_NAMES.length && STI_NAMES[sti]) return STI_NAMES[sti];
+  return name;
+}
+
+function buildStyleType(sgc) {
+  // sgc: 2=character, 5=table, else paragraph
+  if (sgc === 2) return STYLE_TYPE_CHARACTER;
+  if (sgc === 5) return STYLE_TYPE_TABLE;
+  return STYLE_TYPE_PARAGRAPH;
 }
 
 function extractStyleSheet(tableStream, fib) {
@@ -549,14 +555,7 @@ function extractStyleSheet(tableStream, fib) {
   for (const style of styles) {
     if (!style) continue;
     style.order = order;
-    const builtIn = getBuiltInStyleDefinitionByRawName(style.name);
-    if (builtIn) {
-      style.styleId = builtIn.styleId;
-      style.styleName = builtIn.styleName;
-      style.type = builtIn.type;
-    } else {
-      style.styleId = String(order + 1);
-    }
+    // styleId and styleName already set by parseStd via STI_NAMES[sti]
     // Attach parsed latent style data for this style's sti
     const latent = latentLsd[style.sti];
     if (latent) {
@@ -575,6 +574,7 @@ function parseStd(std, index) {
   const sgc = std.readUInt16LE(2) & 0x000f;
   const istdBase = std.readUInt16LE(2) >> 4;
   const istdNext = std.readUInt16LE(4) >> 4;
+  const istdLink = std.readUInt16LE(6) >> 4;
 
   const cbName = std.readUInt16LE(STSH_STD_NAME_OFFSET);
   if (cbName < 1 || cbName > 50) return null;
@@ -589,9 +589,9 @@ function parseStd(std, index) {
   const parsed = parseSprms(grpprl, true);
 
   const runProperties = extractCharacterPropertiesFromGrpprl(grpprl);
-  const type = resolveStyleTypeFromSgc(name, sgc);
-  const styleId = buildStyleId(name, index);
-  const styleName = buildStyleName(name);
+  const type = buildStyleType(sgc);
+  const styleId = buildStyleId(sti, index);
+  const styleName = buildStyleName(sti, name);
 
   return {
     index,
@@ -605,6 +605,7 @@ function parseStd(std, index) {
     next: istdNext,
     baseCode: istdBase,
     nextCode: istdNext,
+    linkCode: istdLink,
     lineSpacing: parsed.lineSpacing ?? extractLineSpacingFromGrpprl(grpprl),
     alignment: parsed.alignment ?? null,
     leftIndentChars: parsed.leftIndentChars ?? null,

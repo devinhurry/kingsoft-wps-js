@@ -48,3 +48,50 @@ format_xml_tree() {
 
 format_xml_tree "$EXPECTED_DIR"
 format_xml_tree "$CONVERTED_DIR"
+
+# Print normalized diff counts for the main XML files
+echo "=== Normalized diff counts for sample: $SAMPLE_NAME ==="
+node -e "
+const { readFileSync } = require('fs');
+const path = require('path');
+
+const expectedDir = '$EXPECTED_DIR';
+const convertedDir = '$CONVERTED_DIR';
+const mainFiles = ['word/document.xml', 'word/styles.xml', 'word/settings.xml', 'word/numbering.xml'];
+
+function normalizeXmlLines(xml) {
+  return xml
+    .replace(/>\s*</g, '>\n<')
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .filter((l) => !/(rsid|docVar|paraId)/i.test(l));
+}
+
+function editDistance(actual, expected) {
+  let prev = new Array(actual.length + 1).fill(0);
+  for (let i = 1; i <= expected.length; i++) {
+    const cur = new Array(actual.length + 1).fill(0);
+    for (let j = 1; j <= actual.length; j++) {
+      cur[j] = expected[i - 1] === actual[j - 1]
+        ? prev[j - 1] + 1
+        : Math.max(prev[j], cur[j - 1]);
+    }
+    prev = cur;
+  }
+  return expected.length + actual.length - 2 * prev[actual.length];
+}
+
+for (const file of mainFiles) {
+  const expectedPath = path.join(expectedDir, file);
+  const convertedPath = path.join(convertedDir, file);
+  try {
+    const expectedLines = normalizeXmlLines(readFileSync(expectedPath, 'utf8'));
+    const convertedLines = normalizeXmlLines(readFileSync(convertedPath, 'utf8'));
+    const dist = editDistance(convertedLines, expectedLines);
+    console.log(\`  \${file}: \${dist} lines differ (expected \${expectedLines.length}, got \${convertedLines.length})\`);
+  } catch (e) {
+    console.log(\`  \${file}: MISSING (\${e.message})\`);
+  }
+}
+"

@@ -612,7 +612,7 @@ test("emits styles.xml with style definitions from STSH", async () => {
   const wps = readWps(await readFile(BASIC_WPS));
   const docx = wpsToDocxBuffer(wps, { title: "test" });
   const xml = readDocxDocumentXml(docx);
-  assert.match(xml, /<w:pStyle w:val="5"\/>/);
+  assert.match(xml, /<w:pStyle w:val="2"\/>/);
   assert.match(xml, /<w:rPr>.*<w:w w:val="100"\/><w:sz w:val="9"\/><w:szCs w:val="9"\/><\/w:rPr>/s);
 
   const stylesEntry = readZipEntry(docx, "word/styles.xml");
