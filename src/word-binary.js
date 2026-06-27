@@ -55,7 +55,7 @@ export function extractWordBinaryDocument({ wordDocument, table0, table1 = null,
   const subdocuments = splitSubdocuments(wordDocument, pieces, fib.characterCounts);
   const rawText = readPieces(wordDocument, pieces);
   const bodyText = subdocuments.body.rawText;
-  const styles = extractStyleSheet(tableStream, fib);
+  const { styles, latentLsd } = extractStyleSheet(tableStream, fib);
   const fontTable = extractFontTable(tableStream, fib);
   const sections = extractSections(wordDocument, tableStream, fib);
   const defaultTabStop = inferDefaultTabStop(sections);
@@ -75,6 +75,7 @@ export function extractWordBinaryDocument({ wordDocument, table0, table1 = null,
     characterProperties,
     characterRuns,
     styles,
+    latentLsd,
     fontTable,
     sections,
     defaultTabStop,
@@ -265,15 +266,15 @@ function decodeSingleByteText(buffer) {
 
 function inferDefaultTabStop(sections) {
   if (!Array.isArray(sections) || sections.length === 0) {
-    // Gary's personal judgment: when the binary document does not expose a section profile,
-    // keep Word's legacy default tab spacing so plain text alignment does not drift.
+    // When no section profile is available, use 420 twips (half an inch)
+    // as the default tab stop — the value Word applies when no docGrid is specified.
     return 420;
   }
 
   const hasExplicitDocGrid = sections.some((section) => section?.properties?.docGridType != null);
   if (hasExplicitDocGrid) {
-    // Gary's personal judgment: documents that expose an explicit doc grid use the denser
-    // half-width tab behavior in the observed WPS fixtures.
+    // East Asian grid documents use a denser 420-twip default tab stop
+    // to align with the character grid.
     return 420;
   }
 
@@ -470,7 +471,32 @@ function extractStyleSheet(tableStream, fib) {
   }
 
   const cstd = stsh.readUInt16LE(2);
+  const stiMaxWhenSaved = stsh.readUInt16LE(8); // Stshif offset 6 from stshi start
   const styles = new Array(cstd).fill(null);
+
+  // Parse StshiLsd at STSH offset 22 (after cbStshi 2 + stshif 18 + ftcBi 2).
+  // Each entry is a 4-byte LSD structure.  The count equals stiMaxWhenSaved.
+  const latentLsd = [];
+  const lsdOffset = 22;
+  if (lsdOffset + 2 <= 2 + cbStshi) {
+    const cbLSD = stsh.readUInt16LE(lsdOffset);
+    if (cbLSD === 4 && stiMaxWhenSaved > 0) {
+      const mpstiilsdStart = lsdOffset + 2;
+      for (let i = 0; i < stiMaxWhenSaved; i++) {
+        const off = mpstiilsdStart + i * 4;
+        if (off + 4 > 2 + cbStshi) break;
+        const bits = stsh.readUInt16LE(off);
+        latentLsd.push({
+          fLocked: (bits & 0x0001) !== 0,
+          fSemiHidden: (bits & 0x0002) !== 0,
+          fUnhideWhenUsed: (bits & 0x0004) !== 0,
+          fQFormat: (bits & 0x0008) !== 0,
+          iPriority: (bits >> 4) & 0x0FFF,
+        });
+      }
+    }
+  }
+
 
   let off = 2 + cbStshi;
   for (let i = 0; i < cstd && off + 2 <= stsh.length; i += 1) {
@@ -499,40 +525,15 @@ function extractStyleSheet(tableStream, fib) {
     } else {
       style.styleId = String(order + 1);
     }
+    // Attach parsed latent style data for this style's sti
+    const latent = latentLsd[style.sti];
+    if (latent) {
+      style.latent = latent;
+    }
     order += 1;
   }
-  applyCompactWpsStyleProfile(styles);
 
-  return styles;
-}
-
-function applyCompactWpsStyleProfile(styles) {
-  if (!styles.some((style) => style?.name === "正文文本")) return;
-
-  // Evidence: WPS desktop exports documents with the compact built-in style set
-  // containing "正文文本" as Body Text styleId=3, with footer/header shifted to
-  // 4/5 and Default Paragraph Font/Normal Table at 7/6. Documents with the
-  // larger built-in set, such as sample3, do not contain "正文文本" and keep the
-  // standard parsed built-in ids from style-defs.js.
-  const compactBuiltIns = new Map([
-    ["标题 1", { styleId: "2", styleName: "heading 1", type: STYLE_TYPE_PARAGRAPH }],
-    ["正文文本", { styleId: "3", styleName: "Body Text", type: STYLE_TYPE_PARAGRAPH }],
-    ["页脚", { styleId: "4", styleName: "footer", type: STYLE_TYPE_PARAGRAPH }],
-    ["页眉", { styleId: "5", styleName: "header", type: STYLE_TYPE_PARAGRAPH }],
-    ["普通表格", { styleId: "6", styleName: "Normal Table", type: STYLE_TYPE_TABLE }],
-    ["默认段落字体", { styleId: "7", styleName: "Default Paragraph Font", type: STYLE_TYPE_CHARACTER }],
-    ["Table Normal", { styleId: "8", styleName: "Table Normal", type: STYLE_TYPE_TABLE }],
-    ["List Paragraph", { styleId: "9", styleName: "List Paragraph", type: STYLE_TYPE_PARAGRAPH }],
-    ["Table Paragraph", { styleId: "10", styleName: "Table Paragraph", type: STYLE_TYPE_PARAGRAPH }],
-  ]);
-
-  for (const style of styles) {
-    const compact = compactBuiltIns.get(style?.name);
-    if (!compact) continue;
-    style.styleId = compact.styleId;
-    style.styleName = compact.styleName;
-    style.type = compact.type;
-  }
+  return { styles, latentLsd };
 }
 
 function parseStd(std, index) {
@@ -661,7 +662,6 @@ function styleTextColorHex(index) {
     "80FFFF",
     "80FF80",
     "FF80FF",
-    // WPS STSH style color index 6 exports as red in sample3 styles.xml.
     "FF0000",
     "FFFF00",
     "FFFFFF",
@@ -806,8 +806,10 @@ function sectionSprmOperandSize(sprm) {
 
 function applySectionSprm(props, sprm, val) {
   switch (sprm) {
-    case 0x3011:
-      props.breakType = val[0] === 1 ? "continuous" : null;
+    case 0x3009:
+      // sprmSBkc — section break code (MS-DOC §2.6.3)
+      // 0=continuous, 1=newColumn, 2=newPage, 3=evenPage, 4=oddPage
+      props.bkc = val[0];
       break;
     case 0x300a:
       props.titlePg = val[0] !== 0;
@@ -1468,30 +1470,6 @@ function normalizeColumnPositions(columns) {
     if (columns[i] <= columns[i - 1]) return null;
   }
   return columns;
-}
-
-function buildGenericGridCols(rows, sections = null) {
-  const widestRow = rows.reduce((best, row) => (row.cells.length > best.cells.length ? row : best), rows[0]);
-  const weights = widestRow.cells.map((cell) => {
-    const visibleLength = cleanCellText(cell.text).replace(/\s+/g, "").length;
-    return Math.max(1, visibleLength || 1);
-  });
-  const section = sections?.[0]?.properties ?? null;
-  const totalWidth = section
-    ? Math.max(6000, Math.min(12000, section.pageWidth - section.marginLeft - section.marginRight))
-    : 9000;
-  const totalWeight = weights.reduce((sum, weight) => sum + weight, 0) || 1;
-  const cols = [];
-  let consumed = 0;
-  for (let i = 0; i < weights.length; i += 1) {
-    const isLast = i === weights.length - 1;
-    const width = isLast
-      ? totalWidth - consumed
-      : Math.max(300, Math.floor((totalWidth * weights[i]) / totalWeight));
-    cols.push(width);
-    consumed += width;
-  }
-  return cols;
 }
 
 function collectTDefTableEntries(wordDocument, tableStream, fib, pieces, dataStream = null) {
