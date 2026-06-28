@@ -87,6 +87,7 @@ const SPRM_CATEGORIES = {
   0x2400: "spacingBefore",
   0x2401: "spacingAfter",
   0x4A43: "fontSize",
+  0x4845: "textPosition",
   0x4A30: "fontId",
   0x4A4F: "fontAscii",
   0x4A50: "fontEastAsia",
@@ -143,14 +144,16 @@ const ALIGNMENT_MAP = { 0: "left", 1: "right", 2: "center", 3: "both", 4: "distr
 const WORD_ALIGNMENT_MAP = { 0: "left", 1: "center", 2: "right", 3: "both", 4: "distribute", 5: "numTab" };
 
 const SPRM_OPERAND_SIZE_BY_SPRA = [1, 1, 2, 4, 2, 2, -1, 3];
+// MS-DOC-SPEC/19 ICO: 0=auto, 1=black, 2=blue, 3=cyan, 4=green,
+// 5=magenta, 6=red. Use RGB hex for OOXML w:color.
 const WW8_TEXT_COLOR_INDEXES = [
   "auto",
   "000000",
-  "8080FF",
-  "80FFFF",
-  "80FF80",
-  "FF80FF",
-  "FF8080",
+  "0000FF",
+  "00FFFF",
+  "00FF00",
+  "FF00FF",
+  "FF0000",
   "FFFF00",
   "FFFFFF",
   "0000FF",
@@ -336,6 +339,10 @@ function applySprm(props, sprm, val, size) {
       break;
     case 0x4A43:
       props.fontSize = val.readUInt16LE(0);
+      break;
+    case 0x4845:
+      // MS-DOC-SPEC/16 sprmCHpsPos: signed half-point vertical text position.
+      props.textPosition = val.readInt16LE(0);
       break;
     case 0x4A61:
       props.fontSizeCs = val.readUInt16LE(0);

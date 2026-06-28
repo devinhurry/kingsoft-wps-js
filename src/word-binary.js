@@ -580,89 +580,127 @@ function extractStyleSheet(tableStream, fib) {
     nonNullStyles.push(style);
     order += 1;
   }
-
-  // Assign styleIds per WPS numbering:
-  // Normal(sti=0) → "1"
-  // Primary paragraph styles (before first 3+ consecutive char run) → "2".."P+1"
-  // Normal Table(sti=105) → P+2, DPF(sti=65) → P+3
-  // Built-in character styles (sti < 4094) → in STSH order
-  // Custom character styles (sti == 4094) → in STSH order
-  // Remaining styles (secondary paras + leftover) → in STSH order
-
-  // Count primary paragraph styles: those before the first run of 3+ consecutive
-  // character styles (excluding the 3 default styles).
-  let consecutiveChars = 0;
-  let primaryParaCount = 0;
-  let afterCharBlock = false;
-  for (const style of nonNullStyles) {
-    if (defaults.has(style.sti)) continue;
-    if (afterCharBlock) {
-      // already past the char block, don't count more primary paras
-    } else if (style.type === STYLE_TYPE_CHARACTER) {
-      consecutiveChars += 1;
-      if (consecutiveChars >= 3) {
-        afterCharBlock = true;
-      }
-    } else if (style.type === STYLE_TYPE_PARAGRAPH) {
-      primaryParaCount += 1;
-      consecutiveChars = 0;
-    } else {
-      consecutiveChars = 0;
-    }
+  if (!nonNullStyles.some((style) => style.sti === 105)) {
+    const normalTable = createSyntheticNormalTableStyle(styles.length);
+    normalTable.order = order;
+    normalTable._stshIndex = normalTable.index;
+    normalTable.latent = latentLsd[normalTable.sti] ?? null;
+    styles.push(normalTable);
+    nonNullStyles.push(normalTable);
+    order += 1;
   }
 
-  // Phase 1: primary paragraph styles → IDs 2..primaryParaCount+1
-  let primaryParaSeq = 1;
-  // Phase 2: defaults (Table, DPF)
-  // Phase 3: built-in char styles (sti < 4094, not defaults) → grouped first
-  // Phase 4: everything else in STSH order (custom chars + secondary paras interleaved)
-  const builtinChars = [];
-  const postDefaultStyles = []; // everything after the primary block, in STSH order
-  consecutiveChars = 0;
-  afterCharBlock = false;
-
-  for (const style of nonNullStyles) {
-    if (style.sti === 0) {
-      style.styleId = "1";
-    } else if (style.sti === 65) {
-      // assigned later (DPF)
-    } else if (style.sti === 105) {
-      // assigned later (Normal Table)
-    } else if (!afterCharBlock && style.type === STYLE_TYPE_CHARACTER) {
-      consecutiveChars += 1;
-      if (consecutiveChars >= 3) afterCharBlock = true;
-      if (style.sti < 4094) {
-        builtinChars.push(style);
-      } else {
-        postDefaultStyles.push(style);
-      }
-    } else if (!afterCharBlock && style.type === STYLE_TYPE_PARAGRAPH) {
-      consecutiveChars = 0;
-      primaryParaSeq += 1;
-      style.styleId = String(primaryParaSeq);
-    } else {
-      // after char block or non-para-non-char (table/list): keep in STSH order
-      postDefaultStyles.push(style);
-      consecutiveChars = 0;
-    }
+  // MS-DOC StdfBase stores style relationships as istd indexes into STSH.
+  // MS-DOC-SPEC/19 StdfBase defines istdNext as the STSH index of the style
+  // automatically applied after the current style. WPS promotes Normal's
+  // non-self next style before the built-in paragraph block, then assigns
+  // built-in paragraph styles before the list-style range, Normal Table,
+  // Default Paragraph Font, built-in character styles, and finally the
+  // remaining STSH styles.
+  const normalStyle = nonNullStyles.find((style) => style.sti === 0);
+  const normalNextStyle = normalStyle?.nextCode != null
+    && normalStyle.nextCode !== normalStyle.index
+    && normalStyle.nextCode < 0xfff0
+    ? styles[normalStyle.nextCode]
+    : null;
+  const promotedStyles = new Set();
+  if (normalNextStyle?.type === STYLE_TYPE_PARAGRAPH && normalNextStyle.sti !== 0) {
+    promotedStyles.add(normalNextStyle);
   }
-
-  // Assign defaults
-  for (const style of nonNullStyles) {
-    if (style.sti === 105) style.styleId = String(primaryParaCount + 2);
-    if (style.sti === 65) style.styleId = String(primaryParaCount + 3);
-  }
-
-  // Assign built-in char styles first, then everything else in STSH order
-  let nextId = primaryParaCount + 4;
-  for (const style of builtinChars) {
-    if (style.styleId == null) { style.styleId = String(nextId); nextId += 1; }
-  }
-  for (const style of postDefaultStyles) {
-    if (style.styleId == null) { style.styleId = String(nextId); nextId += 1; }
+  const styleIdOrder = [
+    ...nonNullStyles.filter((style) => style.sti === 0),
+    ...promotedStyles,
+    ...nonNullStyles.filter((style) => (
+      style.sti !== 0
+      && !defaults.has(style.sti)
+      && style.type === STYLE_TYPE_PARAGRAPH
+      && style.sti < 179
+      && !promotedStyles.has(style)
+    )),
+    ...nonNullStyles.filter((style) => style.sti === 105),
+    ...nonNullStyles.filter((style) => style.sti === 65),
+    ...nonNullStyles.filter((style) => (
+      style.sti !== 65
+      && style.sti !== 105
+      && style.type === STYLE_TYPE_CHARACTER
+      && style.sti < 179
+    )),
+    ...nonNullStyles.filter((style) => (
+      style.sti !== 0
+      && style.sti !== 65
+      && style.sti !== 105
+      && !promotedStyles.has(style)
+      && !(style.type === STYLE_TYPE_PARAGRAPH && style.sti < 179)
+      && !(style.type === STYLE_TYPE_CHARACTER && style.sti < 179)
+    )),
+  ];
+  for (let i = 0; i < styleIdOrder.length; i += 1) {
+    styleIdOrder[i].styleId = String(i + 1);
   }
 
   return { styles, latentLsd, stiMaxWhenSaved };
+}
+
+function createSyntheticNormalTableStyle(index) {
+  return {
+    index,
+    name: "普通表格",
+    styleName: "Normal Table",
+    sti: 105,
+    sgc: 3,
+    type: STYLE_TYPE_TABLE,
+    styleId: null,
+    basedOn: null,
+    next: index,
+    baseCode: 0x0fff,
+    nextCode: index,
+    linkCode: 0,
+    lineSpacing: null,
+    alignment: null,
+    leftIndentChars: null,
+    rightIndentChars: null,
+    firstLineIndentChars: null,
+    leftIndent: null,
+    rightIndent: null,
+    firstLineIndent: null,
+    spacingBefore: null,
+    spacingAfter: null,
+    spacingBeforeAuto: null,
+    spacingAfterAuto: null,
+    listLevel: null,
+    listId: null,
+    tabs: null,
+    keepLines: null,
+    keepNext: null,
+    pageBreakBefore: null,
+    widowControl: null,
+    bidi: null,
+    snapToGrid: null,
+    textAlignment: null,
+    kinsoku: null,
+    wordWrap: null,
+    overflowPunct: null,
+    topLinePunct: null,
+    autoSpaceDE: null,
+    autoSpaceDN: null,
+    adjustRightInd: null,
+    lineNumberCount: null,
+    paragraphBorders: null,
+    outlineLevel: null,
+    frameWidth: null,
+    frameHeight: null,
+    frameHRule: null,
+    frameX: null,
+    frameY: null,
+    frameXAlign: null,
+    frameYAlign: null,
+    frameHAnchor: null,
+    frameVAnchor: null,
+    frameWrap: null,
+    frameLocked: null,
+    runProperties: null,
+    synthetic: true,
+  };
 }
 
 function parseStd(std, index) {
@@ -796,6 +834,7 @@ function extractLineSpacingFromGrpprl(grpprl) {
 function extractCharacterPropertiesFromGrpprl(grpprl) {
   const props = {};
   scanKnownSprm(grpprl, 0x4a43, 2, (value) => { props.fontSize = value.readUInt16LE(0); });
+  scanKnownSprm(grpprl, 0x4845, 2, (value) => { props.textPosition = value.readInt16LE(0); });
   scanKnownSprm(grpprl, 0x4a61, 2, (value) => { props.fontSizeCs = value.readUInt16LE(0); });
   scanKnownSprm(grpprl, 0x4a4f, 2, (value) => { props.fontAscii = value.readUInt16LE(0); });
   scanKnownSprm(grpprl, 0x4a50, 2, (value) => { props.fontEastAsia = value.readUInt16LE(0); });
@@ -824,10 +863,10 @@ function styleTextColorHex(index) {
   const colors = [
     "auto",
     "000000",
-    "8080FF",
-    "80FFFF",
-    "80FF80",
-    "FF80FF",
+    "0000FF",
+    "00FFFF",
+    "00FF00",
+    "FF00FF",
     "FF0000",
     "FFFF00",
     "FFFFFF",
@@ -980,6 +1019,34 @@ function applySectionSprm(props, sprm, val) {
     case 0x300a:
       props.titlePg = val[0] !== 0;
       break;
+    case 0x3005:
+      // MS-DOC-SPEC/16 sprmSFEvenlySpaced: whether section columns are evenly spaced.
+      props.columnsEvenlySpaced = val[0] !== 0;
+      break;
+    case 0x500b:
+      // MS-DOC-SPEC/16 sprmSCcolumns stores one less than the section column count.
+      props.columnCount = val.readUInt16LE(0) + 1;
+      break;
+    case 0x900c:
+      // MS-DOC-SPEC/16 sprmSDxaColumns: spacing between evenly spaced columns.
+      props.columnSpacing = val.readUInt16LE(0);
+      break;
+    case 0xf203: {
+      // MS-DOC-SPEC/19 SDxaColWidthOperand: iCol, dxaCol width.
+      const iCol = val[0];
+      const width = val.readUInt16LE(1);
+      props.columnWidths ??= [];
+      props.columnWidths[iCol] = width;
+      break;
+    }
+    case 0xf204: {
+      // MS-DOC-SPEC/19 SDxaColSpacingOperand: iCol, dxaCol spacing.
+      const iCol = val[0];
+      const spacing = val.readUInt16LE(1);
+      props.columnSpacings ??= [];
+      props.columnSpacings[iCol] = spacing;
+      break;
+    }
     case 0x3014:
       // sprmSGprfIhdt — header/footer story flags per section (MS-DOC §2.6.3)
       // Bits: 0x01=evenHeader, 0x02=oddHeader, 0x04=evenFooter, 0x08=oddFooter,
@@ -1175,6 +1242,8 @@ function buildTablesFromInTableParagraphBlocks(bodyText, paragraphProperties, pa
       applyRowGeometry(tableRows, gridPositions, sections);
       inferMissingRowHeights(tableRows);
       const { tableWidth, tableWidthType } = inferTableWidth(tableRows);
+      const tableIndent = inferTableIndent(tableRows, gridPositions);
+      const tableAutofit = inferTableAutofit(tableRows);
       const cellMargins = inferTableCellMargins(tableRows);
       const tableBorders = inferTableBorders(tableRows);
       tables.push({
@@ -1185,6 +1254,8 @@ function buildTablesFromInTableParagraphBlocks(bodyText, paragraphProperties, pa
         rows: tableRows,
         tableWidth,
         tableWidthType,
+        tableIndent,
+        tableAutofit,
         cellMargins,
         tableBorders,
       });
@@ -1211,6 +1282,8 @@ function buildTablesFromInTableParagraphBlocks(bodyText, paragraphProperties, pa
       applyRowGeometry(tableRows, gridPositions, sections);
       inferMissingRowHeights(tableRows);
       const { tableWidth, tableWidthType } = inferTableWidth(tableRows);
+      const tableIndent = inferTableIndent(tableRows, gridPositions);
+      const tableAutofit = inferTableAutofit(tableRows);
       const cellMargins = inferTableCellMargins(tableRows);
       const tableBorders = inferTableBorders(tableRows);
       tables.push({
@@ -1221,6 +1294,8 @@ function buildTablesFromInTableParagraphBlocks(bodyText, paragraphProperties, pa
         rows: tableRows,
         tableWidth,
         tableWidthType,
+        tableIndent,
+        tableAutofit,
         cellMargins,
         tableBorders,
       });
@@ -1241,11 +1316,13 @@ function splitRowsIntoTables(rows) {
     const widthKey = row.tableWidth == null
       ? null
       : `${row.tableWidth}:${row.tableWidthType ?? "dxa"}`;
+    const indentKey = row.tableIndent ? `${row.tableIndent.width}:${row.tableIndent.type}` : "none";
     const positionKey = row.tablePosition ? "positioned" : row.tableNoAllowOverlap ? "positioned" : "flow";
     if (
       current.length > 0 &&
       ((widthKey != null && currentWidthKey != null && widthKey !== currentWidthKey) ||
-        (currentPositionKey != null && positionKey !== currentPositionKey))
+        (currentPositionKey != null && positionKey !== currentPositionKey) ||
+        current.some((currentRow) => (currentRow.tableIndent ? `${currentRow.tableIndent.width}:${currentRow.tableIndent.type}` : "none") !== indentKey))
     ) {
       tables.push(current);
       current = [];
@@ -1355,6 +1432,9 @@ function buildGenericTableRow(paragraphRanges, paragraphProperties, bodyText, ro
     tableBorders: rowProperty?.tableBorders ?? null,
     tableWidth: rowProperty?.tableWidth ?? null,
     tableWidthType: rowProperty?.tableWidthType ?? null,
+    tableIndent: rowProperty?.tableIndent ?? null,
+    tableJustification: rowProperty?.tableJustification ?? null,
+    tableAutofit: rowProperty?.tableAutofit ?? null,
     rowHeight: rowProperty?.rowHeight ?? null,
     rowHeightRule: rowProperty?.rowHeightRule ?? null,
     cantSplit: rowProperty?.cantSplit ?? null,
@@ -1709,6 +1789,9 @@ function collectTDefTableEntries(wordDocument, tableStream, fib, pieces, dataStr
         cellBorderAssignments: info.cellBorderAssignments,
         tableWidth: info.tableWidth,
         tableWidthType: info.tableWidthType,
+        tableIndent: info.tableIndent,
+        tableJustification: info.tableJustification,
+        tableAutofit: info.tableAutofit,
         rowHeight: info.rowHeight,
         rowHeightRule: info.rowHeightRule,
         cellMargins: info.cellMargins,
@@ -1748,6 +1831,9 @@ function parseTableRowSprms(data, dataStream = null) {
   let cellFlags = [];
   let tableWidth = null;
   let tableWidthType = null;
+  let tableIndent = null;
+  let tableJustification = null;
+  let tableAutofit = null;
   let rowHeight = null;
   let rowHeightRule = null;
   let cellMargins = null;
@@ -1819,6 +1905,18 @@ function parseTableRowSprms(data, dataStream = null) {
         } else if (widthType !== 1 && widthType !== 0) {
           throw new Error(`Unsupported table width type ${widthType} in sprmTTableWidth`);
         }
+      }
+    } else if (sprm === 0xF661) {
+      if (off + 5 <= data.length) {
+        tableIndent = parseTableIndent(data.subarray(off + 2, off + 5));
+      }
+    } else if (sprm === 0x548A || sprm === 0x5400) {
+      if (off + 4 <= data.length) {
+        tableJustification = parseTableJustification(data.readUInt16LE(off + 2), sprm);
+      }
+    } else if (sprm === 0x3615) {
+      if (off + 3 <= data.length) {
+        tableAutofit = data[off + 2] !== 0;
       }
     } else if (sprm === 0xD605) {
       const cb = data[off + 2];
@@ -1907,6 +2005,9 @@ function parseTableRowSprms(data, dataStream = null) {
     cellBorderAssignments,
     tableWidth,
     tableWidthType,
+    tableIndent,
+    tableJustification,
+    tableAutofit,
     rowHeight,
     rowHeightRule,
     cellMargins,
@@ -1916,6 +2017,35 @@ function parseTableRowSprms(data, dataStream = null) {
     cantSplit,
     repeatHeader,
   };
+}
+
+function parseTableIndent(data) {
+  if (!data || data.length < 3) {
+    throw new Error("Truncated sprmTWidthIndent operand");
+  }
+  const widthType = data[0];
+  const widthValue = data.readInt16LE(1);
+  if (widthType === 0 || widthType === 1) {
+    if (widthValue !== 0) {
+      throw new Error(`Invalid sprmTWidthIndent width ${widthValue} for type ${widthType}`);
+    }
+    return null;
+  }
+  // MS-DOC-SPEC/19 FtsWWidth_Indent permits ftsDxa (0x03) and forbids
+  // ftsPercent/ftsDxaSys; wWidth is signed because table indents may be negative.
+  if (widthType === 3) {
+    return { width: widthValue, type: "dxa" };
+  }
+  throw new Error(`Unsupported sprmTWidthIndent width type ${widthType}`);
+}
+
+function parseTableJustification(value, sprm) {
+  // MS-DOC-SPEC/16 sprmTJc/sprmTJc90: table justification is an unsigned
+  // 16-bit value; the documented default is logical/physical left.
+  if (value === 0) return "left";
+  if (value === 1) return "center";
+  if (value === 2) return "right";
+  throw new Error(`Unsupported table justification ${value} in SPRM 0x${sprm.toString(16)}`);
 }
 
 function inferTableWidth(rows) {
@@ -1933,6 +2063,44 @@ function inferTableWidth(rows) {
     }
   }
   return { tableWidth, tableWidthType };
+}
+
+function inferTableIndent(rows, gridPositions = null) {
+  let indent = null;
+  for (const row of rows) {
+    if (!row.tableIndent) continue;
+    if (!indent) {
+      indent = row.tableIndent;
+      continue;
+    }
+    if (indent.width !== row.tableIndent.width || indent.type !== row.tableIndent.type) {
+      throw new Error("Conflicting table indent sprms were parsed for a single table");
+    }
+  }
+
+  // MS-DOC-SPEC/19 TDefTableOperand: rgdxaCenter[0] is the logical-left
+  // table edge, "indented from the logical left page margin"; preserve that
+  // parsed edge as OOXML table indentation for flow tables.
+  const geometryIndent = gridPositions?.[0] ? { width: gridPositions[0], type: "dxa" } : null;
+  if (indent && indent.width !== 0 && geometryIndent && (indent.width !== geometryIndent.width || indent.type !== geometryIndent.type)) {
+    throw new Error("Conflicting table indent and table geometry were parsed for a single table");
+  }
+  return geometryIndent ?? (indent?.width !== 0 ? indent : null);
+}
+
+function inferTableAutofit(rows) {
+  let autofit = null;
+  for (const row of rows) {
+    if (row.tableAutofit == null) continue;
+    if (autofit == null) {
+      autofit = row.tableAutofit;
+      continue;
+    }
+    if (autofit !== row.tableAutofit) {
+      throw new Error("Conflicting table autofit sprms were parsed for a single table");
+    }
+  }
+  return autofit;
 }
 
 function parseTableCellPadding(data, isDefault) {
@@ -2224,6 +2392,7 @@ function tableBorderStyleFromBrcType(brcType, sprm) {
 }
 
 function colorIndexToHex(colorIndex) {
+  // MS-DOC-SPEC/19 Brc80.ico uses the Ico enumeration; 0 is automatic color.
   if (colorIndex == null || colorIndex === 0) {
     return null;
   }
@@ -2234,6 +2403,7 @@ function colorIndexToHex(colorIndex) {
 }
 
 function colorToHexFromBgr(color) {
+  // MS-DOC-SPEC/19 COLORREF with fAuto 0xFF is cvAuto.
   if (color === 0xff000000) {
     return null;
   }
