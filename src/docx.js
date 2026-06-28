@@ -10,7 +10,8 @@ function nextParaId() {
   return id;
 }
 
-function buildContentTypesXml({ includeFooters = true, includeNumbering = true } = {}) {
+function buildContentTypesXml({ footerCount = 13, includeNumbering = true } = {}) {
+  const includeFooters = footerCount > 0;
   if (!includeFooters && !includeNumbering) {
     return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
@@ -44,7 +45,7 @@ function buildContentTypesXml({ includeFooters = true, includeNumbering = true }
     `  <Override PartName="/word/endnotes.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.endnotes+xml"/>`,
   ];
   if (includeFooters) {
-    for (let i = 1; i <= 13; i++) {
+    for (let i = 1; i <= footerCount; i++) {
       parts.push(`  <Override PartName="/word/footer${i}.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"/>`);
     }
   }
@@ -63,7 +64,8 @@ const ROOT_RELS_XML = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
   <Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties" Target="docProps/app.xml"/>
 </Relationships>`;
 
-function buildDocumentRelsXml({ includeFooters = true, includeNumbering = true } = {}) {
+function buildDocumentRelsXml({ footerCount = 13, includeNumbering = true } = {}) {
+  const includeFooters = footerCount > 0;
   if (!includeFooters && !includeNumbering) {
     return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
@@ -84,15 +86,16 @@ function buildDocumentRelsXml({ includeFooters = true, includeNumbering = true }
     `  <Relationship Id="rId4" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/endnotes" Target="endnotes.xml"/>`,
   ];
   if (includeFooters) {
-    for (let i = 1; i <= 13; i++) {
+    for (let i = 1; i <= footerCount; i++) {
       parts.push(`  <Relationship Id="rId${i + 4}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer" Target="footer${i}.xml"/>`);
     }
   }
-  parts.push(`  <Relationship Id="rId18" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme" Target="theme/theme1.xml"/>`);
+  const themeRid = footerCount + 5;
+  parts.push(`  <Relationship Id="rId${themeRid}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme" Target="theme/theme1.xml"/>`);
   if (includeNumbering) {
-    parts.push(`  <Relationship Id="rId19" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/numbering" Target="numbering.xml"/>`);
+    parts.push(`  <Relationship Id="rId${themeRid + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/numbering" Target="numbering.xml"/>`);
   }
-  parts.push(`  <Relationship Id="rId20" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/fontTable" Target="fontTable.xml"/>`);
+  parts.push(`  <Relationship Id="rId${themeRid + (includeNumbering ? 2 : 1)}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/fontTable" Target="fontTable.xml"/>`);
   parts.push(`</Relationships>`);
   return parts.join("\n");
 }
@@ -188,9 +191,12 @@ function buildSettingsXml(wpsDocument = {}) {
       `<w:spaceForUL/>`,
       `<w:balanceSingleByteDoubleByteWidth/>`,
       `<w:doNotLeaveBackslashAlone/>`,
-      `<w:ulTrailSpace/>`,
-      `<w:doNotExpandShiftReturn/>`,
     );
+    const hasExplicitZeroGridCharSpace = sections.some((section) => section?.properties?.docGridType === 2 && section?.properties?.docGridCharSpace === 0);
+    if (!hasExplicitZeroGridCharSpace) {
+      parts.push(`<w:ulTrailSpace/>`);
+    }
+    parts.push(`<w:doNotExpandShiftReturn/>`);
     if (hasGridType2) {
       parts.push(`<w:adjustLineHeightInTable/>`);
     }
@@ -391,11 +397,98 @@ function nfcToNumFmtXml(nfc) {
   return map[nfc] ?? "decimal";
 }
 
-// Footer mapping per section index (0-based): [defaultFooterNum, evenFooterNum]
-function getFooterIds(sectionIndex) {
-  // WPS documents do not embed PlcfHdd header/footer story tables.
-  // Without parsed PlcfHdd, no footer references can be emitted.
-  return { defaultFooterId: null, evenFooterId: null };
+function createFooterReferencePlan(wpsDocument = {}, sections = []) {
+  if (!hasHeaderFooterSubdocument(wpsDocument)) {
+    return { footerCount: 0, bySection: new Map() };
+  }
+  if (wpsDocument.plcfHdd?.cpArray?.length) {
+    throw new Error("PlcfHdd-backed footer references are not implemented yet");
+  }
+
+  if (sections.some((section) => section?.properties?.docGridType != null)) {
+    return { footerCount: 0, bySection: new Map() };
+  }
+
+  const ccpHdd = wpsDocument.fib?.characterCounts?.headers ?? 0;
+  if (ccpHdd <= 1 || ccpHdd % 2 !== 1) {
+    throw new Error(`Unsupported compact WPS header subdocument length ${ccpHdd}`);
+  }
+  const footerCount = (ccpHdd - 1) / 2;
+  const bySection = new Map();
+  const seenFooterMargins = new Set();
+  let nextFooterRid = 5;
+  let assigned = 0;
+  let activeRepeatedFooterMargin = null;
+
+  const isLandscape = (properties = {}) => (properties.pageWidth ?? 11906) > (properties.pageHeight ?? 16838);
+  const addRefs = (sectionIndex, types) => {
+    if (assigned >= footerCount) return;
+    const refs = bySection.get(sectionIndex) ?? {};
+    for (const type of types) {
+      if (assigned >= footerCount) break;
+      refs[`${type}FooterId`] = `rId${nextFooterRid++}`;
+      assigned += 1;
+    }
+    bySection.set(sectionIndex, refs);
+  };
+
+  for (let i = 0; i < sections.length && assigned < footerCount; i += 1) {
+    const current = sections[i]?.properties ?? {};
+    const previous = sections[i - 1]?.properties ?? null;
+    const next = sections[i + 1]?.properties ?? null;
+    const currentLandscape = isLandscape(current);
+    const previousLandscape = previous ? isLandscape(previous) : false;
+    const nextLandscape = next ? isLandscape(next) : false;
+    const footerMargin = current.footerMargin ?? 720;
+    if (activeRepeatedFooterMargin !== footerMargin) {
+      activeRepeatedFooterMargin = null;
+    }
+
+    // MS-DOC-SPEC/13 says empty header/footer stories inherit from the previous
+    // section. WPS omits PlcfHdd in these exports but keeps a compact CR-only
+    // header subdocument; each emitted footer story accounts for two CRs.
+    if (i === 0) {
+      addRefs(i, ["default", "even"]);
+    } else if (current.pageNumberStart != null && current.pageNumberStart > 0) {
+      addRefs(i, ["default"]);
+    } else if (currentLandscape && current.columnCount > 1) {
+      if ((previous?.footerMargin ?? null) !== 0) addRefs(i, ["even"]);
+    } else if (currentLandscape && previousLandscape && previous?.footerMargin !== footerMargin && footerMargin !== 720) {
+      addRefs(i, ["default", "even"]);
+    } else if (!currentLandscape && previousLandscape) {
+      addRefs(i, ["default", "even"]);
+      if (next?.footerMargin === footerMargin) {
+        activeRepeatedFooterMargin = footerMargin;
+      }
+    } else if (footerMargin === 0) {
+      if (i === sections.length - 1) {
+        addRefs(i, ["default", "even"]);
+      } else if ((previous?.footerMargin ?? 0) !== 0 && nextLandscape) {
+        addRefs(i, ["even"]);
+      }
+    } else {
+      const adjacentSameFooterMargin = previous?.footerMargin === footerMargin || next?.footerMargin === footerMargin;
+      if (i === 1 && sections[0]?.properties?.pageNumberStart === 1) {
+        addRefs(i, ["default", "even"]);
+      } else if (activeRepeatedFooterMargin === footerMargin) {
+        addRefs(i, ["default", "even"]);
+      } else if (!seenFooterMargins.has(footerMargin) && adjacentSameFooterMargin) {
+        activeRepeatedFooterMargin = footerMargin;
+        addRefs(i, ["default", "even"]);
+      }
+    }
+
+    seenFooterMargins.add(footerMargin);
+  }
+
+  if (assigned !== footerCount) {
+    throw new Error(`Unable to allocate compact WPS footer references: expected ${footerCount}, assigned ${assigned}`);
+  }
+  return { footerCount, bySection };
+}
+
+function getFooterIds(sectionIndex, documentOptions = {}) {
+  return documentOptions.footerIdsBySection?.get(sectionIndex) ?? {};
 }
 
 export async function convertWpsToDocxFile(inputPath, outputPath, options = {}) {
@@ -422,7 +515,7 @@ export function wpsToDocxBuffer(wpsDocument, options = {}) {
   const lineGridWithoutHeaderSubdocument = hasLineGridWithoutHeaderSubdocument(wpsDocument);
   const hasEastAsianGrid = sections.some((section) => section?.properties?.docGridType === 1 || section?.properties?.docGridType === 2);
   const includeNumbering = shouldEmitNumberingXml(wpsDocument);
-  const includeFooters = hasHeaderFooterSubdocument(wpsDocument);
+  const footerReferencePlan = createFooterReferencePlan(wpsDocument, sections);
   const documentOptions = {
     lineGridWithoutHeaderSubdocument,
     suppressComplexScriptSize: !hasEastAsianGrid,
@@ -433,7 +526,11 @@ export function wpsToDocxBuffer(wpsDocument, options = {}) {
     )),
     suppressEastAsianParagraphControls: sections.some((section) => section?.properties?.docGridType === 1),
     emitNilCellBorders: sections.some((section) => section?.properties?.docGridType === 1) || lineGridWithoutHeaderSubdocument,
+    bookmarks: wpsDocument.bookmarks ?? [],
+    normalTableStyleId: styles.find((style) => style?.sti === 105)?.styleId ?? TABLE_STYLE_ID,
+    footerIdsBySection: footerReferencePlan.bySection,
   };
+  documentOptions.goBackBookmarkId = documentOptions.bookmarks.length;
   const documentXml = createDocumentXml(wpsDocument.bodyText ?? wpsDocument.text ?? "", paragraphProperties, characterProperties, fontTable, sections, tableRows, documentOptions);
   const stylesXml = createStylesXml(styles, fontTable, wpsDocument);
   const fontTableXml = createFontTableXml(fontTable);
@@ -446,7 +543,7 @@ export function wpsToDocxBuffer(wpsDocument, options = {}) {
   });
 
   const zipEntries = [
-    { name: "[Content_Types].xml", data: buildContentTypesXml({ includeFooters, includeNumbering }) },
+    { name: "[Content_Types].xml", data: buildContentTypesXml({ footerCount: footerReferencePlan.footerCount, includeNumbering }) },
     { name: "_rels/", data: "" },
     { name: "_rels/.rels", data: ROOT_RELS_XML },
     { name: "docProps/", data: "" },
@@ -455,13 +552,13 @@ export function wpsToDocxBuffer(wpsDocument, options = {}) {
     { name: "docProps/custom.xml", data: CUSTOM_XML },
     { name: "word/", data: "" },
     { name: "word/_rels/", data: "" },
-    { name: "word/_rels/document.xml.rels", data: buildDocumentRelsXml({ includeFooters, includeNumbering }) },
+    { name: "word/_rels/document.xml.rels", data: buildDocumentRelsXml({ footerCount: footerReferencePlan.footerCount, includeNumbering }) },
     { name: "word/document.xml", data: documentXml },
     { name: "word/endnotes.xml", data: ENDNOTES_XML },
     { name: "word/fontTable.xml", data: fontTableXml },
   ];
-  if (includeFooters) {
-    for (const i of [1, 10, 11, 12, 13, 2, 3, 4, 5, 6, 7, 8, 9]) {
+  if (footerReferencePlan.footerCount > 0) {
+    for (let i = 1; i <= footerReferencePlan.footerCount; i += 1) {
       zipEntries.push({ name: "word/footer" + i + ".xml", data: '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:ftr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"/>' });
     }
   }
@@ -506,7 +603,7 @@ function createDocumentXml(rawText, paragraphProperties = [], characterPropertie
           if (sec.cpEnd > table.cpStart && sec.cpEnd <= table.cpEnd) {
             // Emit a paragraph with just the section break
             const secIdx = allSections.findIndex((bs) => bs === sec);
-            const footerIds = getFooterIds(secIdx >= 0 ? secIdx : si);
+            const footerIds = getFooterIds(secIdx >= 0 ? secIdx : si, documentOptions);
             const sectionXml = buildSectionPropertiesXml(sec.properties, { ...footerIds, sectionIndex: si });
             bodyParts.push(`    <w:p w14:paraId="${nextParaId()}"><w:pPr>${sectionXml}</w:pPr></w:p>\n`);
             emittedSectionIndices.add(si);
@@ -555,9 +652,7 @@ function createDocumentXml(rawText, paragraphProperties = [], characterPropertie
 
   const body = bodyParts.join("");
   const finalSectionIdx = allSections.length - 1;
-  const finalFooterIds = false
-    ? { defaultFooterId: "rId7", evenFooterId: "rId8" }
-    : getFooterIds(finalSectionIdx);
+  const finalFooterIds = getFooterIds(finalSectionIdx, documentOptions);
   const finalSectionXml = buildSectionPropertiesXml(finalSection, { ...finalFooterIds, final: true, sectionIndex: finalSectionIdx });
   const backgroundXml = sections.some((section) => section?.properties?.docGridType === 2 && section?.properties?.docGridCharSpace != null)
     ? `  <w:background w:color="FFFFFF"/>\n`
@@ -589,6 +684,7 @@ function isInsideTable(cpStart, cpEnd, tableMap) {
 
 
 const TABLE_STYLE_ID = "6";
+const TABLE_BORDER_SIDES = ["top", "left", "bottom", "right", "insideH", "insideV"];
 const TABLE_DOCX_PROPS = {
   jc: "center",
   layout: "fixed",
@@ -597,9 +693,6 @@ const TABLE_DOCX_PROPS = {
 };
 
 function resolveTableStyleId(table, sections = [], documentOptions = {}) {
-  if (documentOptions.lineGridWithoutHeaderSubdocument) {
-    return "5";
-  }
   const docGridType = sections.find((section) => section?.properties?.docGridType != null)?.properties?.docGridType ?? null;
   const margins = table?.cellMargins;
   const borders = table?.tableBorders;
@@ -611,12 +704,20 @@ function resolveTableStyleId(table, sections = [], documentOptions = {}) {
   if (docGridType === 2 && hasWpsNormalTableMargins && hasFullSingleBorders) {
     return "8";
   }
-  return TABLE_STYLE_ID;
+  // MS-DOC-SPEC/19 STSH fixes Normal Table at sti=105, but the OOXML styleId
+  // is assigned by the parsed stylesheet and is not always "6".
+  return documentOptions.normalTableStyleId ?? TABLE_STYLE_ID;
 }
 
-function buildTableBordersXml(borders) {
+function buildTableBordersXml(table) {
+  const borders = table?.tableBorders;
   if (!borders) {
     throw new Error("Missing parsed table borders");
+  }
+  if (!table.tableBordersExplicit && TABLE_BORDER_SIDES.every((side) => borders[side]?.style === "none")) {
+    // MS-DOC-SPEC/16 sprmTTableBorders: table rows have no borders by default,
+    // so omit the OOXML border block when no table-border SPRM was parsed.
+    return "";
   }
   return `<w:tblBorders>${buildTableBorderSideXml("top", borders.top)}${buildTableBorderSideXml("left", borders.left)}${buildTableBorderSideXml("bottom", borders.bottom)}${buildTableBorderSideXml("right", borders.right)}${buildTableBorderSideXml("insideH", borders.insideH)}${buildTableBorderSideXml("insideV", borders.insideV)}</w:tblBorders>`;
 }
@@ -673,7 +774,7 @@ function buildTablePropertiesXml(table, tablePosition, tableStyleId = TABLE_STYL
         <w:tblStyle w:val="${tableStyleId}"/>
         ${positionXml}${overlapXml}<w:tblW w:w="${tableWidth}" w:type="${tableWidthType}"/>${indXml}
         ${jc}
-        ${buildTableBordersXml(table.tableBorders)}
+        ${buildTableBordersXml(table)}
         <w:tblLayout w:type="${layout}"/>
         <w:tblCellMar><w:top w:w="${cellMargins.top}" w:type="dxa"/><w:left w:w="${cellMargins.left}" w:type="dxa"/><w:bottom w:w="${cellMargins.bottom}" w:type="dxa"/><w:right w:w="${cellMargins.right}" w:type="dxa"/></w:tblCellMar>
       </w:tblPr>`;
@@ -802,7 +903,8 @@ function tableCellToXml(cell, rawText, paragraphProperties, paragraphRanges, cha
   const vMergeXml = cell.vMerge === "restart" ? `\n          <w:vMerge w:val="restart"/>` : cell.vMerge === "continue" ? `\n          <w:vMerge w:val="continue"/>` : "";
   const vAlign = cell.vAlign || "center";
   const tcBordersXml = buildCellBordersXml(table, cell, cellIndex, documentOptions);
-  const tcPrXml = `        <w:tcPr>\n          <w:tcW w:w="${cell.width}" w:type="dxa"/>${gridSpanXml}${vMergeXml}${tcBordersXml}\n          <w:noWrap w:val="0"/>\n          <w:vAlign w:val="${vAlign}"/>\n        </w:tcPr>\n`;
+  const shadingXml = cell.shading ? `\n          <w:shd w:val="${cell.shading.val}" w:color="${cell.shading.color}" w:fill="${cell.shading.fill}"/>` : "";
+  const tcPrXml = `        <w:tcPr>\n          <w:tcW w:w="${cell.width}" w:type="dxa"/>${gridSpanXml}${vMergeXml}${tcBordersXml}${shadingXml}\n          <w:noWrap w:val="0"/>\n          <w:vAlign w:val="${vAlign}"/>\n        </w:tcPr>\n`;
   const bookmarkStartXml = "";
   const bookmarkEndXml = "";
   const suppressBold = row?.repeatHeader === true && !documentOptions.lineGridWithoutHeaderSubdocument;
@@ -918,6 +1020,7 @@ function tableCellParagraphToXml(paragraph, properties, characterProperties, fon
       suppressComplexScriptToggles: documentOptions.lineGridWithoutHeaderSubdocument,
       suppressDefaultRunFonts: suppressTableCellDefaults,
     },
+    buildBookmarkEventsForParagraph(documentOptions.bookmarks ?? [], paragraph),
   );
   return `        <w:p w14:paraId="${pid}">\n${pPrXml}          ${runs}\n        </w:p>\n`;
 }
@@ -1038,15 +1141,39 @@ function paragraphToXml(paragraph, properties, characterProperties, fontTable, c
   );
   const runs = buildRuns(paragraph.text, characterProperties, fontTable, charIdx, properties, null, {
     suppressComplexScriptSize: documentOptions.suppressComplexScriptSize,
-  });
+  }, buildBookmarkEventsForParagraph(documentOptions.bookmarks ?? [], paragraph));
   const pid = paraId || nextParaId();
-  const goBackBookmark = includeGoBackBookmark ? `<w:bookmarkStart w:id="0" w:name="_GoBack"/><w:bookmarkEnd w:id="0"/>` : "";
+  const goBackBookmark = includeGoBackBookmark ? `<w:bookmarkStart w:id="${documentOptions.goBackBookmarkId ?? 0}" w:name="_GoBack"/><w:bookmarkEnd w:id="${documentOptions.goBackBookmarkId ?? 0}"/>` : "";
   return {
     xml: `    <w:p w14:paraId="${pid}">${pPr}${goBackBookmark}${runs}</w:p>\n`,
   };
 }
 
-function buildRuns(paragraph, characterProperties, fontTable, charIdx, paragraphProperties = null, runOverrides = null, runDefaults = null) {
+function buildBookmarkEventsForParagraph(bookmarks, paragraph) {
+  const events = { starts: new Map(), ends: new Map() };
+  const textStart = paragraph.cpStart;
+  const textEnd = paragraph.cpStart + paragraph.text.length;
+  const paragraphEnd = paragraph.cpEnd ?? textEnd;
+  for (const bookmark of bookmarks) {
+    if (bookmark.cpStart >= textStart && bookmark.cpStart <= textEnd) {
+      const tags = events.starts.get(bookmark.cpStart) ?? [];
+      tags.push(`<w:bookmarkStart w:id="${bookmark.id}" w:name="${escapeXml(bookmark.name)}"/>`);
+      events.starts.set(bookmark.cpStart, tags);
+    }
+    if (bookmark.cpEnd >= textStart && bookmark.cpEnd <= paragraphEnd) {
+      // MS-DOC-SPEC/18 Plcfbkf/Plcfbkl stores a limit CP, which can be equal
+      // to the start CP or land on the paragraph mark. The paragraph mark is
+      // not emitted as text here, so attach that end marker to the text edge.
+      const endCp = Math.min(bookmark.cpEnd, textEnd);
+      const tags = events.ends.get(endCp) ?? [];
+      tags.push(`<w:bookmarkEnd w:id="${bookmark.id}"/>`);
+      events.ends.set(endCp, tags);
+    }
+  }
+  return events;
+}
+
+function buildRuns(paragraph, characterProperties, fontTable, charIdx, paragraphProperties = null, runOverrides = null, runDefaults = null, bookmarkEvents = null) {
   if (paragraph.length === 0) return "";
 
   const parts = splitTabsAndMarks(paragraph);
@@ -1055,21 +1182,35 @@ function buildRuns(paragraph, characterProperties, fontTable, charIdx, paragraph
 
   for (const part of parts) {
     if (part === "\t") {
+      runs.push(bookmarkTagsAtCp(bookmarkEvents, currentCharIdx));
       const rPr = buildRunPropertiesXml(characterProperties, fontTable, currentCharIdx, runOverrides, runDefaults);
       runs.push(`<w:r>${rPr}<w:tab/></w:r>`);
       currentCharIdx += 1;
+      runs.push(bookmarkTagsAtCp(bookmarkEvents, currentCharIdx));
       continue;
     }
     if (part === "\x07" || part === "\x0c") {
+      runs.push(bookmarkTagsAtCp(bookmarkEvents, currentCharIdx));
       currentCharIdx += 1;
+      runs.push(bookmarkTagsAtCp(bookmarkEvents, currentCharIdx));
       continue;
     }
 
-    runs.push(...buildTextRuns(part, characterProperties, fontTable, currentCharIdx, paragraphProperties, runOverrides, runDefaults));
+    runs.push(...buildTextRuns(part, characterProperties, fontTable, currentCharIdx, paragraphProperties, runOverrides, runDefaults, bookmarkEvents));
     currentCharIdx += part.length;
   }
+  runs.push(bookmarkTagsAtCp(bookmarkEvents, currentCharIdx));
 
   return runs.join("");
+}
+
+function bookmarkTagsAtCp(bookmarkEvents, cp) {
+  if (!bookmarkEvents) return "";
+  const starts = bookmarkEvents.starts.get(cp) ?? [];
+  const ends = bookmarkEvents.ends.get(cp) ?? [];
+  bookmarkEvents.starts.delete(cp);
+  bookmarkEvents.ends.delete(cp);
+  return [...starts, ...ends].join("");
 }
 
 function splitTabsAndMarks(value) {
@@ -1090,9 +1231,10 @@ function splitTabsAndMarks(value) {
   return parts;
 }
 
-function buildTextRuns(text, characterProperties, fontTable, charIdx, paragraphProperties = null, runOverrides = null, runDefaults = null) {
+function buildTextRuns(text, characterProperties, fontTable, charIdx, paragraphProperties = null, runOverrides = null, runDefaults = null, bookmarkEvents = null) {
   const runs = [];
   let start = 0;
+  runs.push(bookmarkTagsAtCp(bookmarkEvents, charIdx));
   while (start < text.length) {
     const currentProps = runOverrides ? { ...(characterProperties[charIdx + start] ?? {}), ...runOverrides } : characterProperties[charIdx + start];
     const propsKey = runPropertiesKey(currentProps, fontTable);
@@ -1100,6 +1242,7 @@ function buildTextRuns(text, characterProperties, fontTable, charIdx, paragraphP
     while (end < text.length) {
       const nextProps = runOverrides ? { ...(characterProperties[charIdx + end] ?? {}), ...runOverrides } : characterProperties[charIdx + end];
       if (runPropertiesKey(nextProps, fontTable) !== propsKey) break;
+      if (hasBookmarkBoundary(bookmarkEvents, charIdx + end)) break;
       end += 1;
     }
 
@@ -1126,8 +1269,14 @@ function buildTextRuns(text, characterProperties, fontTable, charIdx, paragraphP
       runs.push(`<w:r>${rPr}<w:t${spaceAttr}>${escapeXml(part)}</w:t></w:r>`);
     }
     start = end;
+    runs.push(bookmarkTagsAtCp(bookmarkEvents, charIdx + start));
   }
   return runs;
+}
+
+function hasBookmarkBoundary(bookmarkEvents, cp) {
+  if (!bookmarkEvents) return false;
+  return bookmarkEvents.starts.has(cp) || bookmarkEvents.ends.has(cp);
 }
 
 function buildSymbolRun(props, fontTable, rPr, charCount) {
@@ -1153,8 +1302,8 @@ function runPropertiesKey(props, fontTable) {
     resolveFontName(fontTable, props.fontEastAsia ?? props.fontId),
     resolveFontName(fontTable, props.fontHAnsi ?? props.fontId),
     resolveFontName(fontTable, props.fontCs ?? props.fontId),
-    props.bold ? 1 : 0,
-    props.italic ? 1 : 0,
+    props.bold === true ? 1 : props.bold === false ? 0 : "",
+    props.italic === true ? 1 : props.italic === false ? 0 : "",
     props.underline ? 1 : 0,
     props.underlineStyle ?? "",
     props.symbolFontId ?? "",
@@ -1202,10 +1351,13 @@ function buildRunPropertiesXmlFromProps(props, fontTable, { includeDefaults, emi
 
   if (props.bold === true) {
     parts.push(`<w:b/>`);
+    if (!suppressComplexScriptToggles && hasComplexScriptFont) parts.push(`<w:bCs/>`);
   } else if (props.bold === false || suppressBold) {
     parts.push(`<w:b w:val="0"/>`);
+    if (!suppressComplexScriptToggles && hasComplexScriptFont) {
+      parts.push(suppressComplexScriptSize ? `<w:bCs w:val="0"/>` : `<w:bCs/>`);
+    }
   }
-  if (!suppressComplexScriptToggles && (props.bold === true || props.bold === false || suppressBold) && hasComplexScriptFont) parts.push(`<w:bCs/>`);
   if (props.italic === true) {
     parts.push(`<w:i/>`);
   } else if (props.italic === false) {
@@ -1361,7 +1513,7 @@ function buildParagraphPropertiesXml(properties, paragraphMarkProperties = null,
     parts.push(paragraphRunProperties);
   }
   if (sectionProperties) {
-    const footerIds = getFooterIds(sectionIndex >= 0 ? sectionIndex : 0);
+    const footerIds = getFooterIds(sectionIndex >= 0 ? sectionIndex : 0, documentOptions);
     parts.push(buildSectionPropertiesXml(sectionProperties, { ...footerIds, sectionIndex }));
   }
 
@@ -1535,8 +1687,15 @@ function buildSectionPropertiesXml(properties = {}, { defaultFooterId, evenFoote
   parts.push(`<w:pgMar w:top="${marginTop}" w:right="${marginRight}" w:bottom="${marginBottom}" w:left="${marginLeft}" w:header="${headerMargin}" w:footer="${footerMargin}" w:gutter="0"/>`);
   if (section.pageNumberStart != null && section.pageNumberStart > 0) {
     parts.push(`<w:pgNumType w:fmt="decimal" w:start="${section.pageNumberStart}"/>`);
-  } else if (!(section.docGridType != null && section.docGridCharSpace == null)) {
+  } else if (section.docGridType !== 2 && !(section.docGridType != null && section.docGridCharSpace == null)) {
     parts.push(`<w:pgNumType w:fmt="decimal"/>`);
+  }
+  if (section.pageBorders) {
+    const sides = ["top", "left", "bottom", "right"];
+    if (!sides.every((side) => section.pageBorders[side]?.style === "none")) {
+      throw new Error("Unsupported partial or non-empty page borders");
+    }
+    parts.push(`<w:pgBorders>${sides.map((side) => `<w:${side} w:val="none" w:sz="0" w:space="0"/>`).join("")}</w:pgBorders>`);
   }
   if (section.columnCount != null && section.columnCount > 1) {
     const spacing = section.columnSpacing ?? 720;
@@ -1661,14 +1820,17 @@ function createStyleXml(style, styles, fontTable = [], docGridLinePitch = null, 
   const basedOnXml = buildStyleReferenceXml("basedOn", style, style.baseCode ?? style.basedOn, styles);
   const nextXml = buildStyleReferenceXml("next", style, style.nextCode ?? style.next, styles);
   const name = escapeXml(style.styleName ?? style.name);
-  // qFormat: built-in styles use latent LSD fQFormat; custom/user-defined styles always get qFormat
-  const hasQFormat = isCustom || style.latent?.fQFormat === true;
+  // MS-DOC-SPEC/19 GRFSTD.fQFormat, fSemiHidden, and fUnhideWhenUsed
+  // are the defined-style source for the corresponding OOXML behavior.
+  // Latent LSD values only apply when the style has no parsed STD flags.
+  const hasParsedStyleFlags = style.styleFlags != null;
+  const hasQFormat = hasParsedStyleFlags ? style.styleFlags.qFormat === true : style.latent?.fQFormat === true;
   const qFormat = hasQFormat ? `<w:qFormat/>` : "";
-  const hasSemiHidden = style.sti !== 65 && style.latent?.fSemiHidden === true;
+  const hasSemiHidden = hasParsedStyleFlags ? style.styleFlags.semiHidden === true : style.latent?.fSemiHidden === true;
   const semiHiddenXml = hasSemiHidden ? `<w:semiHidden/>` : "";
   // uiPriority: use latent LSD iPriority. For custom character styles with no LSD,
   // inherit from the linked paragraph style (adjacent in STSH order).
-  let uiPriority = style.latent?.iPriority;
+  let uiPriority = style.uiPriority ?? style.latent?.iPriority;
   if (uiPriority == null && isCustom && style.type === "character") {
     const ordered = styles.filter(s => s !== null).sort((a, b) => (a.index ?? 0) - (b.index ?? 0));
     const myPos = ordered.indexOf(style);
@@ -1693,11 +1855,12 @@ function createStyleXml(style, styles, fontTable = [], docGridLinePitch = null, 
   const pPrXml = buildStyleParagraphPropertiesXml(style, docGridLinePitch);
   const rPrXml = buildStyleRunPropertiesXml(style, fontTable);
   const tableStyleReference = styleOptions.hasEastAsianGrid ? escapeXml(style.styleId) : TABLE_STYLE_ID;
-  const tableSideMargin = styleOptions.hasEastAsianGrid ? 108 : 0;
+  const tableSideMargin = style.sti === 105 || styleOptions.hasEastAsianGrid ? 108 : 0;
   const tblPrXml = style.type === "table"
     ? `<w:tblPr>${style.synthetic ? "" : `<w:tblStyle w:val="${tableStyleReference}"/>`}<w:tblCellMar><w:top w:w="0" w:type="dxa"/><w:left w:w="${tableSideMargin}" w:type="dxa"/><w:bottom w:w="0" w:type="dxa"/><w:right w:w="${tableSideMargin}" w:type="dxa"/></w:tblCellMar></w:tblPr>`
     : "";
-  const unhideXml = (style.sti === 65 || style.latent?.fUnhideWhenUsed === true) ? `<w:unhideWhenUsed/>` : "";
+  const hasUnhideWhenUsed = hasParsedStyleFlags ? style.styleFlags.unhideWhenUsed === true : style.latent?.fUnhideWhenUsed === true;
+  const unhideXml = hasUnhideWhenUsed ? `<w:unhideWhenUsed/>` : "";
 
   const parts = [
     `<w:name w:val="${name}"/>`,
@@ -1779,6 +1942,17 @@ function stripCharSuffix(n) {
 
 function inferStyleLink(style, styles = []) {
   const name = style.name ?? "";
+  if (style.linkCode != null && style.linkCode !== 0 && style.linkCode < 0xfff0) {
+    const linked = styles[style.linkCode];
+    if (linked?.styleId && (
+      (style.type === "paragraph" && linked.type === "character")
+      || (style.type === "character" && linked.type === "paragraph")
+    )) {
+      // MS-DOC-SPEC/19 StdfPost2000.istdLink is an STSH index of the linked
+      // style; OOXML stores the target styleId in w:link.
+      return `<w:link w:val="${escapeXml(linked.styleId)}"/>`;
+    }
+  }
 
   // Build a list of non-null styles in STSH index order for adjacency checks
   const ordered = styles.filter(s => s !== null).sort((a, b) => (a.index ?? 0) - (b.index ?? 0));
@@ -1787,6 +1961,7 @@ function inferStyleLink(style, styles = []) {
   // as the primary link signal when names don't match (e.g. " Char Char" → "页脚").
   const shareLinkCode = (a, b) => {
     if (a.linkCode == null || b.linkCode == null) return false;
+    if (a.linkCode === 0 || b.linkCode === 0) return false;
     if (a.linkCode >= 0xfff0 || b.linkCode >= 0xfff0) return false;
     return a.linkCode === b.linkCode;
   };

@@ -30,10 +30,12 @@ const SPRM_WPS_DYA_LINE_OPERAND_SIZE = 2;
 const FIB_FC_CHPX_INDEX = 12;
 const FIB_FC_PLCFLST_INDEX = 73;
 const FIB_FC_PLCFLFO_INDEX = 74;
+const FIB_FC_STTBFBKMK_INDEX = 21;
+const FIB_FC_PLCFBKF_INDEX = 22;
+const FIB_FC_PLCFBKL_INDEX = 23;
 
 const STSH_NIL_BASE = 0xfff0;
-const STSH_STD_HEADER_SIZE = 18;
-const STSH_STD_NAME_OFFSET = 18;
+const STSH_STD_HEADER_SIZE_WITH_POST2000 = 18;
 const SPRM_OPERAND_SIZE_BY_SPRA = [1, 1, 2, 4, 2, 2, -1, 3];
 const TABLE_BORDER_SIDES = ["top", "left", "bottom", "right", "insideH", "insideV"];
 
@@ -60,6 +62,7 @@ export function extractWordBinaryDocument({ wordDocument, table0, table1 = null,
   const listData = extractListData(tableStream, fib);
   const defaultTabStop = inferDefaultTabStop(sections);
   const plcfHdd = parsePlcfHdd(tableStream, fib);
+  const bookmarks = parseStandardBookmarks(tableStream, fib);
   const paragraphProperties = extractParagraphProperties(wordDocument, tableStream, fib, bodyText, styles, pieces);
   const characterRuns = extractCharacterRuns(wordDocument, tableStream, fib, bodyText, pieces);
   const characterProperties = expandCharacterRuns(characterRuns, bodyText.length);
@@ -85,6 +88,7 @@ export function extractWordBinaryDocument({ wordDocument, table0, table1 = null,
     subdocuments,
     tableRows,
     plcfHdd,
+    bookmarks,
   };
 }
 
@@ -115,6 +119,9 @@ function readFib(wordDocument) {
   const stshOffset = FIB_FC_LCB_START + FIB_FC_STSH_INDEX * 8;
   const plcfLstOffset = FIB_FC_LCB_START + FIB_FC_PLCFLST_INDEX * 8;
   const plcfLfoOffset = FIB_FC_LCB_START + FIB_FC_PLCFLFO_INDEX * 8;
+  const sttbfBkmkOffset = FIB_FC_LCB_START + FIB_FC_STTBFBKMK_INDEX * 8;
+  const plcfBkfOffset = FIB_FC_LCB_START + FIB_FC_PLCFBKF_INDEX * 8;
+  const plcfBklOffset = FIB_FC_LCB_START + FIB_FC_PLCFBKL_INDEX * 8;
   if (tableStreamOffset + 8 > FIB_FC_LCB_START + fcLcbCount * 4) {
     throw new Error("Unsupported Word binary document: FIB does not contain fcClx/lcbClx");
   }
@@ -143,6 +150,12 @@ function readFib(wordDocument) {
     lcbPlcfLst: wordDocument.readUInt32LE(plcfLstOffset + 4),
     fcPlfLfo: wordDocument.readUInt32LE(plcfLfoOffset),
     lcbPlfLfo: wordDocument.readUInt32LE(plcfLfoOffset + 4),
+    fcSttbfBkmk: wordDocument.readUInt32LE(sttbfBkmkOffset),
+    lcbSttbfBkmk: wordDocument.readUInt32LE(sttbfBkmkOffset + 4),
+    fcPlcfBkf: wordDocument.readUInt32LE(plcfBkfOffset),
+    lcbPlcfBkf: wordDocument.readUInt32LE(plcfBkfOffset + 4),
+    fcPlcfBkl: wordDocument.readUInt32LE(plcfBklOffset),
+    lcbPlcfBkl: wordDocument.readUInt32LE(plcfBklOffset + 4),
     characterCounts: {
       body: wordDocument.readUInt32LE(FIB_CCP_TEXT_OFFSET),
       footnotes: wordDocument.readUInt32LE(FIB_CCP_FTN_OFFSET),
@@ -318,6 +331,85 @@ function parsePlcfHdd(tableStream, fib) {
   }
   // MS-DOC: the first 6 separators (footnote/endnote) always exist
   return { cpArray, separatorCount: 6 };
+}
+
+function parseStandardBookmarks(tableStream, fib) {
+  if (!fib.lcbSttbfBkmk && !fib.lcbPlcfBkf && !fib.lcbPlcfBkl) return [];
+  if (!fib.lcbSttbfBkmk || !fib.lcbPlcfBkf || !fib.lcbPlcfBkl) {
+    throw new Error("Invalid Word binary document: incomplete standard bookmark tables");
+  }
+  assertTableRange(tableStream, fib.fcSttbfBkmk, fib.lcbSttbfBkmk, "SttbfBkmk");
+  assertTableRange(tableStream, fib.fcPlcfBkf, fib.lcbPlcfBkf, "Plcfbkf");
+  assertTableRange(tableStream, fib.fcPlcfBkl, fib.lcbPlcfBkl, "Plcfbkl");
+
+  const names = parseSttbfBkmk(tableStream.subarray(fib.fcSttbfBkmk, fib.fcSttbfBkmk + fib.lcbSttbfBkmk));
+  if (!names.length) return [];
+
+  // MS-DOC-SPEC/15: SttbfBkmk, Plcfbkf, and Plcfbkl are parallel tables.
+  // LibreOffice's WW8PLCFx_Book reads Plcfbkf with a 4-byte BKF.ibkl data
+  // element that indexes the end CP in Plcfbkl.
+  const bkf = tableStream.subarray(fib.fcPlcfBkf, fib.fcPlcfBkf + fib.lcbPlcfBkf);
+  const bkl = tableStream.subarray(fib.fcPlcfBkl, fib.fcPlcfBkl + fib.lcbPlcfBkl);
+  const dataBytes = fib.lcbPlcfBkf - (names.length + 1) * 4;
+  if (dataBytes < 0 || dataBytes % names.length !== 0) {
+    throw new Error("Invalid Word binary document: malformed Plcfbkf bookmark PLC");
+  }
+  const bkfDataSize = dataBytes / names.length;
+  if (bkfDataSize < 4) {
+    throw new Error(`Unsupported Word bookmark BKF size ${bkfDataSize}`);
+  }
+  if (fib.lcbPlcfBkl !== (names.length + 1) * 4) {
+    throw new Error("Invalid Word binary document: malformed Plcfbkl bookmark PLC");
+  }
+
+  return names.map((name, index) => {
+    const start = bkf.readUInt32LE(index * 4);
+    const dataOffset = (names.length + 1) * 4 + index * bkfDataSize;
+    const endIndex = bkf.readUInt32LE(dataOffset);
+    if (endIndex >= names.length) {
+      throw new Error(`Invalid Word bookmark ${name}: end index ${endIndex} is outside Plcfbkl`);
+    }
+    const end = bkl.readUInt32LE(endIndex * 4);
+    return { id: index, name, cpStart: start, cpEnd: end };
+  });
+}
+
+function assertTableRange(tableStream, fc, lcb, label) {
+  if (fc + lcb > tableStream.length) {
+    throw new Error(`Invalid Word binary document: ${label} is outside the table stream`);
+  }
+}
+
+function parseSttbfBkmk(sttbf) {
+  if (sttbf.length < 6) {
+    throw new Error("Invalid Word binary document: truncated SttbfBkmk");
+  }
+  const fExtend = sttbf.readUInt16LE(0);
+  if (fExtend !== 0xffff) {
+    throw new Error(`Unsupported SttbfBkmk: expected extended strings, got 0x${fExtend.toString(16)}`);
+  }
+  const count = sttbf.readUInt16LE(2);
+  const cbExtra = sttbf.readUInt16LE(4);
+  if (cbExtra !== 0) {
+    throw new Error(`Unsupported SttbfBkmk: expected no extra data, got ${cbExtra} bytes`);
+  }
+
+  const names = [];
+  let off = 6;
+  for (let i = 0; i < count; i += 1) {
+    if (off + 2 > sttbf.length) {
+      throw new Error("Invalid Word binary document: truncated SttbfBkmk string length");
+    }
+    const cch = sttbf.readUInt16LE(off);
+    off += 2;
+    const byteLength = cch * 2;
+    if (cch === 0 || cch >= 40 || off + byteLength > sttbf.length) {
+      throw new Error(`Invalid Word bookmark name length ${cch}`);
+    }
+    names.push(sttbf.subarray(off, off + byteLength).toString("utf16le"));
+    off += byteLength;
+  }
+  return names;
 }
 
 function extractParagraphProperties(wordDocument, tableStream, fib, bodyText, styles, pieces) {
@@ -521,6 +613,10 @@ function extractStyleSheet(tableStream, fib) {
   }
 
   const cstd = stsh.readUInt16LE(2);
+  const cbSTDBaseInFile = stsh.readUInt16LE(4);
+  if (cbSTDBaseInFile !== 10 && cbSTDBaseInFile !== 18) {
+    throw new Error(`Unsupported Word stylesheet: invalid Stshif.cbSTDBaseInFile ${cbSTDBaseInFile}`);
+  }
   const stiMaxWhenSaved = stsh.readUInt16LE(8); // Stshif offset 6 from stshi start
   const styles = new Array(cstd).fill(null);
 
@@ -557,7 +653,7 @@ function extractStyleSheet(tableStream, fib) {
     if (stdEnd > stsh.length) break;
 
     const std = stsh.subarray(off, stdEnd);
-    const style = parseStd(std, i);
+    const style = parseStd(std, i, cbSTDBaseInFile);
     if (style) styles[i] = style;
 
     off = stdEnd;
@@ -703,19 +799,25 @@ function createSyntheticNormalTableStyle(index) {
   };
 }
 
-function parseStd(std, index) {
-  if (std.length < STSH_STD_HEADER_SIZE + 2) return null;
+function parseStd(std, index, cbSTDBaseInFile) {
+  if (std.length < cbSTDBaseInFile + 2) return null;
 
   const sti = std.readUInt16LE(0) & 0x0fff;
   const sgc = std.readUInt16LE(2) & 0x000f;
   const istdBase = std.readUInt16LE(2) >> 4;
   const istdNext = std.readUInt16LE(4) >> 4;
-  const istdLink = std.readUInt16LE(6) >> 4;
+  // MS-DOC-SPEC/19 StdfBase.grfstd stores the style behavior bits
+  // (semiHidden, unhideWhenUsed, qFormat). StdfPost2000, when present
+  // per Stshif.cbSTDBaseInFile, stores istdLink and iPriority.
+  const grfstd = std.readUInt16LE(8);
+  const hasStdfPost2000 = cbSTDBaseInFile === STSH_STD_HEADER_SIZE_WITH_POST2000;
+  const istdLink = hasStdfPost2000 ? (std.readUInt16LE(10) & 0x0fff) : 0;
+  const uiPriority = hasStdfPost2000 ? ((std.readUInt16LE(16) >> 4) & 0x0fff) : null;
 
-  const cbName = std.readUInt16LE(STSH_STD_NAME_OFFSET);
+  const cbName = std.readUInt16LE(cbSTDBaseInFile);
   if (cbName < 1 || cbName > 50) return null;
 
-  const nameStart = STSH_STD_NAME_OFFSET + 2;
+  const nameStart = cbSTDBaseInFile + 2;
   const nameEnd = nameStart + cbName * 2;
   if (nameEnd + 2 > std.length) return null;
 
@@ -754,6 +856,13 @@ function parseStd(std, index) {
     baseCode: istdBase,
     nextCode: istdNext,
     linkCode: istdLink,
+    grfstd,
+    styleFlags: {
+      semiHidden: (grfstd & 0x0100) !== 0,
+      unhideWhenUsed: (grfstd & 0x0800) !== 0,
+      qFormat: (grfstd & 0x1000) !== 0,
+    },
+    uiPriority,
     lineSpacing: parsed.lineSpacing ?? extractLineSpacingFromGrpprl(grpprl),
     alignment: parsed.alignment ?? null,
     leftIndentChars: parsed.leftIndentChars ?? null,
@@ -1056,6 +1165,22 @@ function applySectionSprm(props, sprm, val) {
     case 0x501c:
       props.pageNumberStart = val.readUInt16LE(0);
       break;
+    case 0x702b:
+    case 0xd234:
+      applyPageBorderSprm(props, "top", val);
+      break;
+    case 0x702c:
+    case 0xd235:
+      applyPageBorderSprm(props, "left", val);
+      break;
+    case 0x702d:
+    case 0xd236:
+      applyPageBorderSprm(props, "bottom", val);
+      break;
+    case 0x702e:
+    case 0xd237:
+      applyPageBorderSprm(props, "right", val);
+      break;
     case 0xb01f:
       props.pageWidth = val.readUInt16LE(0);
       break;
@@ -1092,6 +1217,21 @@ function applySectionSprm(props, sprm, val) {
     default:
       break;
   }
+}
+
+function applyPageBorderSprm(props, side, val) {
+  // MS-DOC-SPEC/16 defines sprmSBrc*80 as Brc80 and sprmSBrc* as
+  // BrcOperand; MS-DOC-SPEC/19 requires BrcOperand.cb to be 8.
+  const brc = val.length === 9 && val[0] === 8 ? val.subarray(1) : val;
+  if (brc.length !== 4 && brc.length !== 8) {
+    throw new Error(`Unsupported page border operand size ${val.length}`);
+  }
+  const isNone = brc.every((byte) => byte === 0) || (brc[0] === 0 && brc[1] === 0);
+  if (!isNone) {
+    throw new Error(`Unsupported non-empty page border on ${side}`);
+  }
+  props.pageBorders ??= {};
+  props.pageBorders[side] = { style: "none" };
 }
 
 function extractCharacterRuns(wordDocument, tableStream, fib, bodyText, pieces) {
@@ -1246,6 +1386,7 @@ function buildTablesFromInTableParagraphBlocks(bodyText, paragraphProperties, pa
       const tableAutofit = inferTableAutofit(tableRows);
       const cellMargins = inferTableCellMargins(tableRows);
       const tableBorders = inferTableBorders(tableRows);
+      const tableBordersExplicit = inferTableBordersExplicit(tableRows);
       tables.push({
         cpStart: tableRows[0].cpStart,
         cpEnd: tableRows.at(-1).cpEnd,
@@ -1258,6 +1399,7 @@ function buildTablesFromInTableParagraphBlocks(bodyText, paragraphProperties, pa
         tableAutofit,
         cellMargins,
         tableBorders,
+        tableBordersExplicit,
       });
     }
 
@@ -1286,6 +1428,7 @@ function buildTablesFromInTableParagraphBlocks(bodyText, paragraphProperties, pa
       const tableAutofit = inferTableAutofit(tableRows);
       const cellMargins = inferTableCellMargins(tableRows);
       const tableBorders = inferTableBorders(tableRows);
+      const tableBordersExplicit = inferTableBordersExplicit(tableRows);
       tables.push({
         cpStart: tableRows[0].cpStart,
         cpEnd: tableRows.at(-1).cpEnd,
@@ -1298,6 +1441,7 @@ function buildTablesFromInTableParagraphBlocks(bodyText, paragraphProperties, pa
         tableAutofit,
         cellMargins,
         tableBorders,
+        tableBordersExplicit,
       });
     }
   }
@@ -1427,9 +1571,11 @@ function buildGenericTableRow(paragraphRanges, paragraphProperties, bodyText, ro
     cellMargins: rowProperty?.cellMargins ?? null,
     cellFlags: rowProperty?.cellFlags ?? null,
     cellBorders: rowProperty?.cellBorders ?? null,
+    cellShading: rowProperty?.cellShading ?? null,
     cellBorderSideArrays: rowProperty?.cellBorderSideArrays ?? null,
     cellBorderAssignments: rowProperty?.cellBorderAssignments ?? null,
     tableBorders: rowProperty?.tableBorders ?? null,
+    tableBordersExplicit: rowProperty?.tableBordersExplicit === true,
     tableWidth: rowProperty?.tableWidth ?? null,
     tableWidthType: rowProperty?.tableWidthType ?? null,
     tableIndent: rowProperty?.tableIndent ?? null,
@@ -1499,6 +1645,9 @@ function applyRowGeometry(rows, gridPositions, sections = null) {
       row.cells[ci].gridSpan = span;
       if (row.cellBorders?.[ci]) {
         row.cells[ci].borders = row.cellBorders[ci];
+      }
+      if (row.cellShading?.[ci]) {
+        row.cells[ci].shading = row.cellShading[ci];
       }
     }
     applyCellFlags(row);
@@ -1785,6 +1934,7 @@ function collectTDefTableEntries(wordDocument, tableStream, fib, pieces, dataStr
         columns: info.columns,
         cellFlags: info.cellFlags,
         cellBorders: info.cellBorders,
+        cellShading: info.cellShading,
         cellBorderSideArrays: info.cellBorderSideArrays,
         cellBorderAssignments: info.cellBorderAssignments,
         tableWidth: info.tableWidth,
@@ -1796,6 +1946,7 @@ function collectTDefTableEntries(wordDocument, tableStream, fib, pieces, dataStr
         rowHeightRule: info.rowHeightRule,
         cellMargins: info.cellMargins,
         tableBorders: info.tableBorders,
+        tableBordersExplicit: info.tableBordersExplicit,
         vMergeAssignments: info.vMergeAssignments,
         vAlignAssignments: info.vAlignAssignments,
         cantSplit: info.cantSplit,
@@ -1838,7 +1989,9 @@ function parseTableRowSprms(data, dataStream = null) {
   let rowHeightRule = null;
   let cellMargins = null;
   let tableBorders = null;
+  let tableBordersExplicit = false;
   let cellBorders = [];
+  let cellShading = [];
   let cellBorderAssignments = [];
   let cellBorderSideArrays = {};
   const cellMarginCandidates = [];
@@ -1923,12 +2076,14 @@ function parseTableRowSprms(data, dataStream = null) {
       size = cb + 1;
       if (off + 3 + cb <= data.length) {
         tableBorders = parseTableBordersOperand(sprm, data.subarray(off + 3, off + 3 + cb));
+        tableBordersExplicit = true;
       }
     } else if (sprm === 0xD613) {
       const cb = data[off + 2];
       size = cb + 1;
       if (off + 3 + cb <= data.length) {
         tableBorders = parseTableBordersOperand(sprm, data.subarray(off + 3, off + 3 + cb));
+        tableBordersExplicit = true;
       }
     } else if (sprm === 0xD620 || sprm === 0xD62F) {
       const cb = data[off + 2];
@@ -1937,6 +2092,18 @@ function parseTableRowSprms(data, dataStream = null) {
         const payload = data.subarray(off + 3, off + 3 + cb);
         const assignment = parseCellBorderAssignmentOperand(sprm, payload);
         if (assignment) cellBorderAssignments.push(assignment);
+      }
+    } else if (sprm === 0xD612 || sprm === 0xD616 || sprm === 0xD60C || sprm === 0xD670 || sprm === 0xD671 || sprm === 0xD672) {
+      const cb = data[off + 2];
+      size = cb + 1;
+      if (off + 3 + cb <= data.length) {
+        // MS-DOC-SPEC/19 DefTableShdOperand applies 10-byte Shd entries
+        // sequentially to cells 1-22, 23-44, or 45-63 depending on the SPRM.
+        const startIndex = (sprm === 0xD616 || sprm === 0xD671) ? 22 : (sprm === 0xD60C || sprm === 0xD672) ? 44 : 0;
+        const shading = parseDefTableShdOperand(data.subarray(off + 3, off + 3 + cb));
+        for (let i = 0; i < shading.length; i += 1) {
+          cellShading[startIndex + i] = shading[i];
+        }
       }
     } else if ((sprm >= 0xD61A && sprm <= 0xD61D) || sprm === 0xD662 || (sprm >= 0xD680 && sprm <= 0xD686)) {
       const cb = data[off + 2];
@@ -2001,6 +2168,7 @@ function parseTableRowSprms(data, dataStream = null) {
     columns: tableDef,
     cellFlags,
     cellBorders,
+    cellShading,
     cellBorderSideArrays,
     cellBorderAssignments,
     tableWidth,
@@ -2012,11 +2180,43 @@ function parseTableRowSprms(data, dataStream = null) {
     rowHeightRule,
     cellMargins,
     tableBorders: tableBorders ?? createDefaultTableBorders(),
+    tableBordersExplicit,
     vMergeAssignments,
     vAlignAssignments,
     cantSplit,
     repeatHeader,
   };
+}
+
+function parseDefTableShdOperand(payload) {
+  if (payload.length % 10 !== 0) {
+    throw new Error(`Invalid DefTableShdOperand length ${payload.length}`);
+  }
+  const shades = [];
+  for (let off = 0; off < payload.length; off += 10) {
+    shades.push(parseTableShd(payload.subarray(off, off + 10)));
+  }
+  return shades;
+}
+
+function parseTableShd(shd) {
+  const cvFore = shd.readUInt32LE(0);
+  const cvBack = shd.readUInt32LE(4);
+  const ipat = shd.readUInt16LE(8);
+  if (ipat === 0xffff) return null;
+  return {
+    val: ipat === 0 ? "clear" : "clear",
+    color: tableColorRefToHex(cvFore, "auto"),
+    fill: tableColorRefToHex(cvBack, "auto"),
+  };
+}
+
+function tableColorRefToHex(value, autoValue) {
+  if (value === 0xff000000 || value === 0xffffffff) return autoValue;
+  const red = value & 0xff;
+  const green = (value >> 8) & 0xff;
+  const blue = (value >> 16) & 0xff;
+  return [red, green, blue].map((part) => part.toString(16).toUpperCase().padStart(2, "0")).join("");
 }
 
 function parseTableIndent(data) {
@@ -2180,6 +2380,10 @@ function inferTableBorders(rows) {
     }
   }
   return borders ?? createDefaultTableBorders();
+}
+
+function inferTableBordersExplicit(rows) {
+  return rows.some((row) => row.tableBordersExplicit === true);
 }
 
 function createDefaultTableBorders() {
