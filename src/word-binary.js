@@ -176,7 +176,7 @@ function readFib(wordDocument) {
 }
 
 // MS-DOC-SPEC/17 §DopBase, §Dop97, §Dop2002: parse DOP fields needed for
-// OOXML settings.xml emission (drawing grid, revision marking, format filter).
+// OOXML settings.xml emission.
 function parseDop(tableStream, fib) {
   const { fcDop, lcbDop } = fib;
   if (!lcbDop) {
@@ -198,21 +198,56 @@ function parseDop(tableStream, fib) {
   // default tab stop interval in twips.
   const dxaTab = dop.readUInt16LE(10);
 
-  // Dogrid at DOP offset 400 (Dop97), present in all DOP versions >= Dop97
-  // MS-DOC-SPEC/17 lines 1838-1890
+  // DopTypography at DOP offset 90 (Dop97), present before Dogrid.
+  // MS-DOC-SPEC/17 §DopTypography maps fKerningPunct to the opposite of
+  // noPunctuationKerning and iJustification to characterSpacingControl.
+  let typography = null;
+  if (dop.length >= 400) {
+    const flags = dop[90];
+    typography = {
+      fKerningPunct: (flags & 0x01) !== 0,
+      iJustification: (flags >> 1) & 0x03,
+    };
+  }
+
+  // Dogrid at DOP offset 400 (Dop97), present in all DOP versions >= Dop97.
+  // MS-DOC-SPEC/17 §Dogrid defines the display counts as 7-bit fields.
   let dogrid = null;
   if (dop.length >= 410) {
-    const dyGridDisplay = dop[408] & 0x7F;
-    const dxGridDisplay = dop[409] & 0x7F;
     const fFollowMargins = (dop[409] >> 7) & 1;
     dogrid = {
       xaGrid: dop.readUInt16LE(400),
       yaGrid: dop.readUInt16LE(402),
       dxaGrid: dop.readUInt16LE(404),
       dyaGrid: dop.readUInt16LE(406),
-      dyGridDisplay: dyGridDisplay === 0 ? 1 : dyGridDisplay,
-      dxGridDisplay: dxGridDisplay === 0 ? 1 : dxGridDisplay,
+      dyGridDisplay: dop[408] & 0x7F,
+      dxGridDisplay: dop[409] & 0x7F,
       fFollowMargins: !!fFollowMargins,
+    };
+  }
+
+  // MS-DOC-SPEC/17 §Dop97: fIncludeHeader/fIncludeFooter control whether
+  // page borders include the header/footer area. The OOXML
+  // bordersDoNotSurround* settings have the opposite sense.
+  let pageBorderIncludes = null;
+  if (dop.length >= 412) {
+    const dop97Flags = dop.readUInt16LE(410);
+    pageBorderIncludes = {
+      header: ((dop97Flags >> 12) & 1) !== 0,
+      footer: ((dop97Flags >> 13) & 1) !== 0,
+    };
+  }
+
+  // MS-DOC-SPEC/17 §Dop2002 stores XML validation flags after
+  // verCompatPre10 at DOP offset 542. fValidateXML (bit b) and
+  // fShowXMLErrors (bit d) have the opposite sense from the OOXML settings
+  // doNotValidateAgainstSchema and doNotDemarcateInvalidXml.
+  let xmlValidation = null;
+  if (dop.length >= 546) {
+    const dop2002Flags = dop.readUInt32LE(542);
+    xmlValidation = {
+      fValidateXML: ((dop2002Flags >> 12) & 1) !== 0,
+      fShowXMLErrors: ((dop2002Flags >> 14) & 1) !== 0,
     };
   }
 
@@ -220,7 +255,7 @@ function parseDop(tableStream, fib) {
   // MS-DOC-SPEC/17 lines 1040-1042; default per spec is 0x5024
   const grfFmtFilter = dop.length >= 556 ? dop.readUInt16LE(554) : null;
 
-  return { fRevMarking, dxaTab, dogrid, grfFmtFilter };
+  return { fRevMarking, dxaTab, typography, dogrid, pageBorderIncludes, xmlValidation, grfFmtFilter };
 }
 
 function readPieceTable(tableStream, fcClx, lcbClx) {
@@ -598,6 +633,7 @@ function parseParagraphGrpprl(data) {
     keepNext: parsed.keepNext ?? null,
     pageBreakBefore: parsed.pageBreakBefore ?? null,
     widowControl: parsed.widowControl ?? null,
+    contextualSpacing: parsed.contextualSpacing ?? null,
     bidi: parsed.bidi ?? null,
     snapToGrid: parsed.snapToGrid ?? null,
     textAlignment: parsed.textAlignment ?? null,

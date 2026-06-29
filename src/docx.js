@@ -140,9 +140,13 @@ function buildSettingsXml(wpsDocument = {}) {
     parts.push(`<w:mirrorMargins w:val="1"/>`);
   }
 
+  const pageBorderIncludes = dop?.pageBorderIncludes;
+  if (!pageBorderIncludes) {
+    throw new Error("Invalid WPS document: missing parsed Dop97 page-border include flags");
+  }
   parts.push(
-    `<w:bordersDoNotSurroundHeader w:val="${hasEastAsianGrid && !noHeaderLineGrid ? 0 : 1}"/>`,
-    `<w:bordersDoNotSurroundFooter w:val="${hasEastAsianGrid && !noHeaderLineGrid ? 0 : 1}"/>`,
+    `<w:bordersDoNotSurroundHeader w:val="${pageBorderIncludes.header ? 0 : 1}"/>`,
+    `<w:bordersDoNotSurroundFooter w:val="${pageBorderIncludes.footer ? 0 : 1}"/>`,
   );
 
   // MS-DOC-SPEC/17 §Dop2002 grfFmtFilter: suggested formatting filter.
@@ -150,7 +154,7 @@ function buildSettingsXml(wpsDocument = {}) {
   if (hasEastAsianGrid && dop?.grfFmtFilter == null) {
     throw new Error("Invalid WPS document: missing parsed grfFmtFilter for East Asian grid settings");
   }
-  if (hasEastAsianGrid) {
+  if (hasEastAsianGrid && dop.grfFmtFilter !== 0x5024) {
     const filterHex = dop.grfFmtFilter.toString(16).toUpperCase().padStart(4, "0");
     parts.push(`<w:stylePaneFormatFilter w:val="${filterHex}" w:allStyles="1" w:customStyles="0" w:latentStyles="0" w:stylesInUse="0" w:headingStyles="0" w:numberingStyles="0" w:tableStyles="0" w:directFormattingOnRuns="1" w:directFormattingOnParagraphs="1" w:directFormattingOnNumbering="1" w:directFormattingOnTables="1" w:clearFormatting="1" w:top3HeadingStyles="1" w:visibleStyles="0" w:alternateStyleNames="0"/>`);
   }
@@ -194,14 +198,31 @@ function buildSettingsXml(wpsDocument = {}) {
     `<w:displayVerticalDrawingGridEvery w:val="${dogrid.dyGridDisplay}"/>`,
   );
 
-  if (hasEastAsianGrid) {
+  const typography = dop?.typography;
+  if (hasEastAsianGrid && !typography) {
+    throw new Error("Invalid WPS document: missing parsed DopTypography for East Asian settings");
+  }
+  if (hasEastAsianGrid && !typography.fKerningPunct) {
     parts.push(`<w:noPunctuationKerning w:val="1"/>`);
   }
 
-  parts.push(`<w:characterSpacingControl w:val="${hasEastAsianGrid ? "compressPunctuation" : "doNotCompress"}"/>`);
+  const characterSpacingControl = hasEastAsianGrid
+    ? ["doNotCompress", "compressPunctuation", "compressPunctuationAndJapaneseKana"][typography.iJustification]
+    : "doNotCompress";
+  if (!characterSpacingControl) {
+    throw new Error(`Unsupported DopTypography iJustification ${typography.iJustification}`);
+  }
+  parts.push(`<w:characterSpacingControl w:val="${characterSpacingControl}"/>`);
 
-  if (hasGridType2) {
-    parts.push(`<w:doNotValidateAgainstSchema/>`, `<w:doNotDemarcateInvalidXml/>`);
+  const xmlValidation = dop?.xmlValidation;
+  if (hasGridType2 && !xmlValidation) {
+    throw new Error("Invalid WPS document: missing parsed Dop2002 XML validation settings");
+  }
+  if (hasGridType2 && !xmlValidation.fValidateXML) {
+    parts.push(`<w:doNotValidateAgainstSchema/>`);
+  }
+  if (hasGridType2 && !xmlValidation.fShowXMLErrors) {
+    parts.push(`<w:doNotDemarcateInvalidXml/>`);
   }
 
   // WPS emits explicit note separator references for ordinary documents and
@@ -588,6 +609,7 @@ export function wpsToDocxBuffer(wpsDocument, options = {}) {
     suppressEastAsianParagraphControls: sections.some((section) => section?.properties?.docGridType === 1),
     emitNilCellBorders: sections.some((section) => section?.properties?.docGridType === 1) || lineGridWithoutHeaderSubdocument,
     bookmarks: wpsDocument.bookmarks ?? [],
+    emitSyntheticGoBackBookmark: hasEastAsianGrid,
     normalTableStyleId: styles.find((style) => style?.sti === 105)?.styleId ?? TABLE_STYLE_ID,
     footerIdsBySection: footerReferencePlan.bySection,
   };
@@ -635,7 +657,11 @@ export function wpsToDocxBuffer(wpsDocument, options = {}) {
 }
 
 function createDocumentXml(rawText, paragraphProperties = [], characterProperties = [], fontTable = [], sections = [], tables = [], documentOptions = {}) {
+  documentOptions.bodyTextLength = rawText.length;
   const paragraphs = splitWordParagraphs(rawText);
+  for (const paragraph of paragraphs) {
+    paragraph.bodyTextLength = rawText.length;
+  }
   const allSections = sections;
   const finalSection = sections.at(-1)?.properties;
 
@@ -653,7 +679,7 @@ function createDocumentXml(rawText, paragraphProperties = [], characterPropertie
     while (tableIdx < sortedTables.length && sortedTables[tableIdx].cpStart <= paragraph.cpStart) {
       const table = sortedTables[tableIdx];
       if (table.cpStart < paragraph.cpEnd && !table._generated) {
-        const includeGoBackBookmarkInTable = !emittedGoBackBookmark && table.cpStart === 0;
+        const includeGoBackBookmarkInTable = documentOptions.emitSyntheticGoBackBookmark && !emittedGoBackBookmark && table.cpStart === 0;
         bodyParts.push(tableToXml(table, rawText, paragraphProperties, paragraphs, characterProperties, fontTable, tables.indexOf(table), sections, {
           ...documentOptions,
           includeGoBackBookmarkInFirstCell: includeGoBackBookmarkInTable,
@@ -703,7 +729,7 @@ function createDocumentXml(rawText, paragraphProperties = [], characterPropertie
       paragraphSection,
       secIdx,
       null,
-      !emittedGoBackBookmark,
+      documentOptions.emitSyntheticGoBackBookmark && !emittedGoBackBookmark,
       documentOptions,
     );
     bodyParts.push(result.xml);
@@ -832,10 +858,20 @@ function buildTablePropertiesXml(table, tablePosition, tableStyleId = TABLE_STYL
   const cellMargins = table.cellMargins ?? TABLE_DOCX_PROPS.cellMar;
   const overlapXml = tablePosition?.noAllowOverlap ? `<w:tblOverlap w:val="never"/>` : "";
   const positionXml = tablePosition ? buildTablePositionXml(tablePosition) : "";
+  // MS-DOC-SPEC/16 sprmTJc/sprmTJc90 specify table justification. WPS stores
+  // the same table-level SPRM on each row in some exports, so use it only when
+  // all parsed row values agree.
+  const rowJustifications = (table.rows ?? [])
+    .map((row) => row.tableJustification)
+    .filter((jcValue) => jcValue != null);
+  const rowConsensusJc = rowJustifications.length > 0
+    && rowJustifications.every((jcValue) => jcValue === rowJustifications[0])
+    ? rowJustifications[0]
+    : null;
+  const explicitJc = table.tableJustification ?? rowConsensusJc;
   // MS-DOC-SPEC/19 TDefTableOperand says rgdxaCenter outer edges include
   // cell spacing. Remove the parsed leading cell margin before writing tblInd;
   // a negative edge that is only that margin is WPS' centered-table marker.
-  const explicitJc = table.tableJustification;
   const normalizedTableIndent = table.tableIndent?.type === "dxa" && table.tableIndent.width < 0
     ? { ...table.tableIndent, width: table.tableIndent.width + (cellMargins.left ?? 0) }
     : table.tableIndent;
@@ -1229,6 +1265,7 @@ function cleanParagraphText(text) {
 function paragraphToXml(paragraph, properties, characterProperties, fontTable, charIdx, sectionProperties = null, spacingSectionProperties = sectionProperties, sectionIndex = -1, paraId = null, includeGoBackBookmark = false, documentOptions = {}) {
   const charCount = paragraph.text.length;
   const paragraphMarkProperties = characterProperties[paragraph.cpEnd - 1] ?? characterProperties[charIdx + charCount] ?? null;
+  const bookmarkEvents = buildBookmarkEventsForParagraph(documentOptions.bookmarks ?? [], paragraph);
   const pPr = buildParagraphPropertiesXml(
     properties,
     paragraphMarkProperties,
@@ -1241,11 +1278,14 @@ function paragraphToXml(paragraph, properties, characterProperties, fontTable, c
   );
   const runs = buildRuns(paragraph.text, characterProperties, fontTable, charIdx, properties, null, {
     suppressComplexScriptSize: documentOptions.suppressComplexScriptSize,
-  }, buildBookmarkEventsForParagraph(documentOptions.bookmarks ?? [], paragraph));
+  }, bookmarkEvents);
   const pid = paraId || nextParaId();
+  const emptyParagraphBookmarks = paragraph.text.length === 0
+    ? bookmarkTagsAtCp(bookmarkEvents, paragraph.cpStart)
+    : "";
   const goBackBookmark = includeGoBackBookmark ? `<w:bookmarkStart w:id="${documentOptions.goBackBookmarkId ?? 0}" w:name="_GoBack"/><w:bookmarkEnd w:id="${documentOptions.goBackBookmarkId ?? 0}"/>` : "";
   return {
-    xml: `    <w:p w14:paraId="${pid}">${pPr}${goBackBookmark}${runs}</w:p>\n`,
+    xml: `    <w:p w14:paraId="${pid}">${pPr}${goBackBookmark}${emptyParagraphBookmarks}${runs}</w:p>\n`,
   };
 }
 
@@ -1254,16 +1294,24 @@ function buildBookmarkEventsForParagraph(bookmarks, paragraph) {
   const textStart = paragraph.cpStart;
   const textEnd = paragraph.cpStart + paragraph.text.length;
   const paragraphEnd = paragraph.cpEnd ?? textEnd;
+  const bodyTextLength = paragraph.bodyTextLength ?? null;
   for (const bookmark of bookmarks) {
-    if (bookmark.cpStart >= textStart && bookmark.cpStart <= textEnd) {
+    const isFinalZeroLengthAtParagraphEnd = bookmark.cpStart === bookmark.cpEnd
+      && bookmark.cpStart === paragraphEnd
+      && paragraphEnd === bodyTextLength;
+    const isZeroLengthAtEmptyParagraphStart = bookmark.cpStart === bookmark.cpEnd
+      && bookmark.cpStart === textStart
+      && textStart === textEnd;
+    if ((bookmark.cpStart >= textStart && bookmark.cpStart < textEnd) || isFinalZeroLengthAtParagraphEnd || isZeroLengthAtEmptyParagraphStart) {
       const tags = events.starts.get(bookmark.cpStart) ?? [];
       tags.push(`<w:bookmarkStart w:id="${bookmark.id}" w:name="${escapeXml(bookmark.name)}"/>`);
-      events.starts.set(bookmark.cpStart, tags);
+      events.starts.set(Math.min(bookmark.cpStart, textEnd), tags);
     }
-    if (bookmark.cpEnd >= textStart && bookmark.cpEnd <= paragraphEnd) {
+    if ((bookmark.cpEnd >= textStart && bookmark.cpEnd <= textEnd) || isFinalZeroLengthAtParagraphEnd || isZeroLengthAtEmptyParagraphStart) {
       // MS-DOC-SPEC/18 Plcfbkf/Plcfbkl stores a limit CP, which can be equal
       // to the start CP or land on the paragraph mark. The paragraph mark is
-      // not emitted as text here, so attach that end marker to the text edge.
+      // not emitted as text here; delimiter-boundary CPs belong to the next
+      // insertion point unless this is the final body boundary.
       const endCp = Math.min(bookmark.cpEnd, textEnd);
       const tags = events.ends.get(endCp) ?? [];
       tags.push(`<w:bookmarkEnd w:id="${bookmark.id}"/>`);
@@ -1545,8 +1593,13 @@ function buildRunPropertiesXmlFromProps(props, fontTable, { includeDefaults, emi
 }
 
 function langIdToBcp47(langId) {
+  // MS-DOC-SPEC/16 §sprmCRgLid0/sprmCRgLid1 stores a LID value.
+  // LID meanings come from Microsoft's LCID table:
+  // https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-lcid/
   const map = {
+    0x0004: "zh-Hans",
     0x0804: "zh-CN",
+    0x7804: "zh",
     0x0404: "zh-TW",
     0x0411: "ja-JP",
     0x0412: "ko-KR",
@@ -1559,7 +1612,11 @@ function langIdToBcp47(langId) {
     0x0419: "ru-RU",
     0x0001: "ar",
   };
-  return map[langId] ?? "zh-CN";
+  const tag = map[langId];
+  if (!tag) {
+    throw new Error(`Unsupported MS-DOC LID 0x${langId.toString(16)}`);
+  }
+  return tag;
 }
 
 function buildFontAttributes(props, fontTable) {
@@ -1607,6 +1664,9 @@ function buildParagraphPropertiesXml(properties, paragraphMarkProperties = null,
   }
   appendParagraphSpacingXml(parts, properties, spacingSectionProperties);
   appendParagraphIndentXml(parts, properties, paragraphText);
+  if (properties?.contextualSpacing) {
+    parts.push(`<w:contextualSpacing/>`);
+  }
   if (properties?.alignment) {
     parts.push(`<w:jc w:val="${properties.alignment}"/>`);
   }
@@ -1687,7 +1747,6 @@ function appendParagraphControlXml(parts, properties, { includeDefaults, lineNum
     emit("bidi", properties?.bidi, { defaultValue: false });
     emit("adjustRightInd", properties?.adjustRightInd);
     emit("snapToGrid", properties?.snapToGrid);
-    emit("contextualSpacing", properties?.contextualSpacing);
   }
 }
 

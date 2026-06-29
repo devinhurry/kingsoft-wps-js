@@ -233,6 +233,59 @@ test("sample3 settings.xml matches WPS expected export without metadata noise", 
   assert.doesNotMatch(extractSettingsNode(convertedXml, "w:compat"), /<w:ulTrailSpace\/>/);
 });
 
+test("sample5 settings use parsed DOP typography, grid display, and XML validation flags", async () => {
+  const wps = readWps(await readFile("sample/sample5/original.wps"));
+  assert.equal(wps.dop.dogrid.dxGridDisplay, 0);
+  assert.equal(wps.dop.typography.fKerningPunct, true);
+  assert.equal(wps.dop.grfFmtFilter, 0x5024);
+  assert.equal(wps.dop.xmlValidation.fValidateXML, true);
+  assert.equal(wps.dop.xmlValidation.fShowXMLErrors, true);
+
+  const docx = wpsToDocxBuffer(wps, { title: "sample5" });
+  const convertedXml = readZipEntry(docx, "word/settings.xml").toString("utf8");
+  const expectedXml = readZipEntry(await readFile("sample/sample5/expected.docx"), "word/settings.xml").toString("utf8");
+
+  assert.equal(extractSettingsNode(convertedXml, "w:stylePaneFormatFilter"), null);
+  assert.equal(extractSettingsNode(convertedXml, "w:displayHorizontalDrawingGridEvery"), extractSettingsNode(expectedXml, "w:displayHorizontalDrawingGridEvery"));
+  assert.equal(extractSettingsNode(convertedXml, "w:noPunctuationKerning"), null);
+  assert.equal(extractSettingsNode(convertedXml, "w:doNotValidateAgainstSchema"), null);
+  assert.equal(extractSettingsNode(convertedXml, "w:doNotDemarcateInvalidXml"), null);
+  assert.ok(countXmlLineEdits(convertedXml, expectedXml) < 2);
+});
+
+test("sample5 paragraphs preserve sprmPFContextualSpacing from PAPX", async () => {
+  const wps = readWps(await readFile("sample/sample5/original.wps"));
+  assert.equal(wps.paragraphProperties.filter((properties) => properties?.contextualSpacing === true).length, 5);
+
+  const docx = wpsToDocxBuffer(wps, { title: "sample5" });
+  const convertedXml = readDocxDocumentXml(docx);
+  const expectedXml = readDocxDocumentXml(await readFile("sample/sample5/expected.docx"));
+  assert.equal((convertedXml.match(/<w:contextualSpacing\/>/g) ?? []).length, 5);
+  assert.ok(countXmlLineEdits(convertedXml, expectedXml) < 4);
+});
+
+test("converted DOCX maps parsed MS-DOC LIDs without unknown-language fallback", async () => {
+  const sample3 = readWps(await readFile("sample/sample3/original.wps"));
+  assert.equal(
+    sample3.characterRuns.filter((run) => run.properties?.langIdEastAsia === 0x0004).length,
+    2,
+  );
+  const sample3Xml = readDocxDocumentXml(wpsToDocxBuffer(sample3, { title: "sample3" }));
+  const sample3ExpectedXml = readDocxDocumentXml(await readFile("sample/sample3/expected.docx"));
+  assert.match(sample3Xml, /<w:lang w:eastAsia="zh-Hans"\/>/);
+  assert.ok(countXmlLineEdits(sample3Xml, sample3ExpectedXml) < 4);
+
+  const sample6 = readWps(await readFile("sample/sample6/original.wps"));
+  assert.equal(
+    sample6.characterRuns.filter((run) => run.properties?.langIdEastAsia === 0x7804).length,
+    1,
+  );
+  const sample6Xml = readDocxDocumentXml(wpsToDocxBuffer(sample6, { title: "sample6" }));
+  const sample6ExpectedXml = readDocxDocumentXml(await readFile("sample/sample6/expected.docx"));
+  assert.match(sample6Xml, /<w:lang w:val="en-US" w:eastAsia="zh" w:bidi="ar"\/>/);
+  assert.ok(countXmlLineEdits(sample6Xml, sample6ExpectedXml) < 4);
+});
+
 test("sample3 styles.xml stays close to WPS expected export", async () => {
   const wps = readWps(await readFile("sample/sample3/original.wps"));
   const docx = wpsToDocxBuffer(wps, { title: "sample3" });
@@ -404,6 +457,7 @@ test("extracts and emits table4 WPS table structure with centered Normal Table s
   assert.match(tableXmls[0], /<w:sym w:font="Wingdings 2" w:char="00A3"\/>/);
   assert.doesNotMatch(tableXmls[0], /<w:t>\(企<\/w:t>/);
   assert.match(tableXmls[0], /单位名称/);
+  assert.match(xml, /<w:bookmarkStart w:id="0" w:name="附件5"\/><w:bookmarkEnd w:id="0"\/>/);
   assert.deepEqual(
     tableXmls.map((t) => (t.match(/<w:tcBorders>/g) || []).length),
     expectedTableXmls.map((t) => (t.match(/<w:tcBorders>/g) || []).length),
@@ -443,6 +497,10 @@ test("converts sample4 without dropping its table block", async () => {
     0,
   );
   assert.throws(() => readZipEntry(docx, "word/numbering.xml"), /DOCX fixture entry not found/);
+  // Regression: style-level rPr must NOT auto-derive szCs from sz when no
+  // explicit fontSizeCs is set. The default style should have sz but no szCs.
+  const convertedStylesXml = readZipEntry(docx, "word/styles.xml").toString("utf8");
+  assert.doesNotMatch(convertedStylesXml, /<w:style w:type="paragraph" w:default="1" w:styleId="1">.*?<w:szCs w:val="32"\/>/s);
 });
 
 test("extracts paragraph line spacing from PAPX pages", async () => {
