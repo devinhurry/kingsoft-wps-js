@@ -2268,10 +2268,19 @@ function buildLatentStylesXml(styles = [], wpsDocument = {}) {
     // in which case the lsdException would be redundant.
     if (sti === 179 && !latent.fQFormat && latent.fSemiHidden && latent.fUnhideWhenUsed && latent.iPriority === 99) continue;
     const attrs = [];
-    if (latent.fQFormat) attrs.push('w:qFormat="1"');
-    if (!latent.fUnhideWhenUsed) attrs.push('w:unhideWhenUsed="0"');
-    attrs.push('w:uiPriority="' + latent.iPriority + '"');
-    if (!latent.fSemiHidden) attrs.push('w:semiHidden="0"');
+    // MS-DOC-SPEC/19 §StdfBase.grfstd: when a style has an actual STSH
+    // definition its GRFSTD fields take precedence over the LSD latent
+    // defaults. Override LSD with the actual style's flags.
+    const actualStyle = (styles ?? []).find(s => s?.sti === sti);
+    const styleFlags = actualStyle?.styleFlags;
+    const semiHidden = styleFlags?.semiHidden != null ? styleFlags.semiHidden : latent.fSemiHidden;
+    const unhideWhenUsed = styleFlags?.unhideWhenUsed != null ? styleFlags.unhideWhenUsed : latent.fUnhideWhenUsed;
+    const qFormat = styleFlags?.qFormat != null ? styleFlags.qFormat : latent.fQFormat;
+    const iPriority = actualStyle?.uiPriority ?? latent.iPriority;
+    if (qFormat) attrs.push('w:qFormat="1"');
+    if (!unhideWhenUsed) attrs.push('w:unhideWhenUsed="0"');
+    attrs.push('w:uiPriority="' + iPriority + '"');
+    if (!semiHidden) attrs.push('w:semiHidden="0"');
     parts.push('<w:lsdException ' + attrs.join(' ') + ' w:name="' + name + '"/>');
   }
   parts.push('</w:latentStyles>');
