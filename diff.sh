@@ -30,7 +30,7 @@ if ! command -v xmllint >/dev/null 2>&1; then
   exit 1
 fi
 
-node "$SCRIPT_DIR/bin/wps-to-docx.js" "$ORIGINAL_WPS" "$CONVERTED_DOCX"
+node "$SCRIPT_DIR/bin/msdoc-wps-to-docx.js" "$ORIGINAL_WPS" "$CONVERTED_DOCX"
 
 rm -rf "$EXPECTED_DIR" "$CONVERTED_DIR"
 mkdir -p "$EXPECTED_DIR" "$CONVERTED_DIR"

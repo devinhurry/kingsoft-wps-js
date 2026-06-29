@@ -110,7 +110,7 @@ function buildDocumentRelsXml({ footerCount = 13, includeNumbering = true, foote
 
 const APP_XML = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties" xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes">
-  <Application>kingsoft-wps-js</Application>
+  <Application>msdoc-wps-parser</Application>
 </Properties>`;
 
 const CUSTOM_XML = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -611,7 +611,7 @@ export async function convertWpsToDocxFile(inputPath, outputPath, options = {}) 
   const wpsDocument = await readWpsFile(inputPath);
   const docx = wpsToDocxBuffer(wpsDocument, {
     title: options.title ?? inputPath,
-    creator: options.creator ?? "kingsoft-wps-js",
+    creator: options.creator ?? "msdoc-wps-parser",
   });
   await writeFile(outputPath, docx);
   return {
@@ -656,7 +656,7 @@ export function wpsToDocxBuffer(wpsDocument, options = {}) {
   const now = new Date().toISOString();
   const coreXml = createCoreXml({
     title: options.title ?? "Converted WPS document",
-    creator: options.creator ?? "kingsoft-wps-js",
+    creator: options.creator ?? "msdoc-wps-parser",
     created: options.created ?? now,
     modified: options.modified ?? now,
   });

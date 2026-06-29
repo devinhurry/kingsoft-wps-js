@@ -1,5 +1,5 @@
 {
-  "name": "kingsoft-wps-js",
+  "name": "msdoc-wps-parser",
   "version": "0.1.0",
   "description": "Pure JavaScript reader for Kingsoft/WPS Office OLE2 .wps files backed by Word binary streams.",
   "type": "module",
@@ -14,8 +14,8 @@
     "LICENSE"
   ],
   "bin": {
-    "kingsoft-wps-js": "./bin/kingsoft-wps-js.js",
-    "wps-to-docx": "./bin/wps-to-docx.js"
+    "msdoc-wps-parser": "./bin/msdoc-wps-parser.js",
+    "msdoc-wps-to-docx": "./bin/msdoc-wps-to-docx.js"
   },
   "scripts": {
     "test": "node --test"
@@ -39,6 +39,7 @@
     "text-extraction",
     "converter",
     "wps-to-docx",
+    "ms-doc",
     "parser",
     "javascript",
     "nodejs"
@@ -46,12 +47,12 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/devinhurry/kingsoft-wps-js.git"
+    "url": "git+https://github.com/devinhurry/msdoc-wps-parser-js.git"
   },
   "bugs": {
-    "url": "https://github.com/devinhurry/kingsoft-wps-js/issues"
+    "url": "https://github.com/devinhurry/msdoc-wps-parser-js/issues"
   },
-  "homepage": "https://github.com/devinhurry/kingsoft-wps-js#readme",
+  "homepage": "https://github.com/devinhurry/msdoc-wps-parser-js#readme",
   "engines": {
     "node": ">=18"
   }

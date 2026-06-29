@@ -1,20 +1,20 @@
-# kingsoft-wps-js — 纯 JavaScript 实现的 Kingsoft/WPS Office `.wps` 文件解析与 DOCX 转换器
+# msdoc-wps-parser — 纯 JavaScript 实现的 `.doc` / `.wps` 文件解析与 DOCX 转换器
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%3E%3D18-green.svg)](package.json)
 [![Language](https://img.shields.io/badge/language-JavaScript-yellow.svg)](https://developer.mozilla.org/zh-CN/docs/Web/JavaScript)
-[![Format](https://img.shields.io/badge/format-.wps-orange.svg)](#支持范围)
+[![Format](https://img.shields.io/badge/format-.doc%20|%20.wps-orange.svg)](#支持范围)
 [![Tests](https://img.shields.io/badge/tests-node--test-brightgreen.svg)](#测试)
 
-纯 JavaScript（无原生依赖）实现的 **Kingsoft/WPS Office `.wps` 文件**读取与文本提取库。
+纯 JavaScript（无原生依赖）实现的 **`.doc` 与 `.wps` 文件**读取与文本提取库。
 针对以 **OLE2 / CFB（复合文档二进制）** 容器存储 **Word 二进制流**
-（`WordDocument`、`0Table` / `1Table`、`Data`）的 `.wps` 文件进行解析，读取
+（`WordDocument`、`0Table` / `1Table`、`Data`）的 `.doc` / `.wps` 文件进行解析，读取
 **Word FIB**、**CLX / Pcdt 分片表**，并解码 **UTF-16LE** 与**压缩单字节**文本
 分片，从而还原正文、段落、页眉、脚注等 Word 子文档内容。
 
-附带命令行工具，以及一份最小化的 **`.wps` → `.docx`（WordprocessingML）转换器**。
+附带命令行工具，以及一份最小化的 **`.doc` / `.wps` → `.docx`（WordprocessingML）转换器**。
 
 ## 功能特性
 
@@ -24,20 +24,23 @@
 - 遍历 **CLX / Pcdt 分片表**，按顺序提取文本
 - 解码 **UTF-16LE** 与**压缩（单字节）**文本分片
 - 输出正文、原始文本、段落，以及 **Word 子文档区间**
-- 附带命令行工具 `kingsoft-wps-js` 与 **`.wps` 转 `.docx`** 转换器
+- 附带命令行工具 `msdoc-wps-parser` 与 **`.doc` / `.wps` 转 `.docx`** 转换器
+- 同时支持 **`.doc`**（Microsoft Word 二进制）和 **`.wps`**（WPS Office）文件——二者底层采用相同的 OLE2/Word 二进制格式
 
 ## 安装
 
 ```sh
-npm install kingsoft-wps-js
+npm install msdoc-wps-parser
 ```
 
 ## 用法
 
 ```js
-import { readWpsFile } from "kingsoft-wps-js";
+import { readWpsFile } from "msdoc-wps-parser";
 
-const document = await readWpsFile("ole2-full.wps");
+// 同时支持 .doc 和 .wps 文件（底层为相同的 Word 二进制格式）
+const document = await readWpsFile("document.doc");
+// const document = await readWpsFile("document.wps");
 
 console.log(document.text);
 console.log(document.paragraphs);
@@ -46,15 +49,19 @@ console.log(document.paragraphs);
 ## 命令行工具
 
 ```sh
-./bin/kingsoft-wps-js.js ole2-full.wps text        # 规范化后的正文文本
-./bin/kingsoft-wps-js.js ole2-full.wps json        # 解析结果以 JSON 输出
-./bin/kingsoft-wps-js.js ole2-full.wps raw         # 原始分片表文本
-./bin/wps-to-docx.js ole2-full.wps out.docx  # 将 .wps 转换为 .docx
+./bin/msdoc-wps-parser.js document.doc text       # 规范化后的正文文本
+./bin/msdoc-wps-parser.js document.doc json       # 解析结果以 JSON 输出
+./bin/msdoc-wps-parser.js document.doc raw        # 原始分片表文本
+./bin/msdoc-wps-to-docx.js document.doc out.docx  # 将 .doc/.wps 转换为 .docx
 ```
 
 DOCX 转换器会根据提取出的正文、段落属性、run 格式、section 与已支持的表格结构，
 输出 **WordprocessingML** 文档。目前仍不处理页眉页脚、绘图对象，以及未支持的
 早期/原生 WPS 格式。
+
+> **注意：** `.doc` 和 `.wps` 文件底层采用相同的 OLE2/CFB + Word 二进制格式。
+> 解析器通过检测 `WordDocument` 流来判断文件类型，不受文件扩展名限制，
+> 因此同一套代码路径即可处理两种格式。
 
 ## 返回的文档对象
 
@@ -70,7 +77,7 @@ DOCX 转换器会根据提取出的正文、段落属性、run 格式、section 
 
 ## 支持范围
 
-当前解析器通过以下方式支持本仓库中的 WPS 测试用例：
+当前解析器通过以下方式支持本仓库中的 `.doc` / `.wps` 测试用例：
 
 1. OLE2 复合文档二进制扇区、FAT、MiniFAT 以及流。
 2. Word 二进制 FIB 表流的选择。
@@ -85,10 +92,10 @@ DOCX 转换器会根据提取出的正文、段落属性、run 格式、section 
 
 ## 应用场景
 
-- 从老旧的 **WPS Office `.wps`** 文档中提取文本
-- 将 `.wps` 文件转换为 `.docx`，以兼容现代 Word / Office
-- 对历史 WPS / Word 二进制格式文档进行索引、检索或归档
-- 构建无需原生依赖即可读取 `.wps` 文件的 Node.js 服务
+- 从老旧的 **WPS Office `.wps`** 及 **Microsoft Word `.doc`** 文档中提取文本
+- 将 `.doc` / `.wps` 文件转换为 `.docx`，以兼容现代 Word / Office
+- 对历史 Word / WPS 二进制格式文档进行索引、检索或归档
+- 构建无需原生依赖即可读取 `.doc` / `.wps` 文件的 Node.js 服务
 - 以编程方式检查 OLE2 / CFB 流及 Word FIB 结构
 
 ## 测试
