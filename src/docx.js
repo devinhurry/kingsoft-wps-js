@@ -2152,8 +2152,12 @@ function buildStyleParagraphPropertiesXml(style, docGridLinePitch = null) {
 }
 
 function buildStyleRunPropertiesXml(style, fontTable) {
+  // For style definitions, suppress automatic derivation of szCs from sz
+  // and automatic complex-script toggles (bCs). Only emit szCs when it is
+  // explicitly set (emitExplicitComplexScriptSize=true handles that path).
+  // This matches WPS Office expected output: style rPr omits redundant Cs props.
   const runPropertiesXml = style.runProperties
-    ? buildRunPropertiesXmlFromProps(style.runProperties, fontTable, { includeDefaults: false, emitExplicitComplexScriptSize: true, emitUnderlineHighlight: false })
+    ? buildRunPropertiesXmlFromProps(style.runProperties, fontTable, { includeDefaults: false, emitExplicitComplexScriptSize: true, emitUnderlineHighlight: false, suppressComplexScriptSize: true, suppressComplexScriptToggles: true })
     : "";
   return runPropertiesXml;
 }
