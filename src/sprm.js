@@ -91,7 +91,7 @@ const SPRM_CATEGORIES = {
   0x2401: "spacingAfter",
   0x4A43: "fontSize",
   0x4845: "textPosition",
-  0x4A30: "fontId",
+  0x4A30: "characterStyleIndex",
   0x4A4F: "fontAscii",
   0x4A50: "fontEastAsia",
   0x4A51: "fontHAnsi",
@@ -360,6 +360,9 @@ function applySprm(props, sprm, val, size) {
       props.fontSizeCs = val.readUInt16LE(0);
       break;
     case 0x4A30:
+      // MS-DOC-SPEC/16 sprmCIstd: STSH index of the character style to apply.
+      props.characterStyleIndex = val.readUInt16LE(0);
+      break;
     case 0x6A0C:
       props.fontId = val.readUInt16LE(0);
       break;

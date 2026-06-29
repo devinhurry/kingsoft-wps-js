@@ -265,6 +265,35 @@ test("sample5 paragraphs preserve sprmPFContextualSpacing from PAPX", async () =
   assert.ok(countXmlLineEdits(convertedXml, expectedXml) < 4);
 });
 
+test("sample7 negative grid profile matches WPS DOCX export", async () => {
+  const wps = readWps(await readFile("sample/sample7/original.wps"));
+  assert.equal(wps.sections[0].properties.docGridType, 1);
+  assert.equal(wps.sections[0].properties.docGridCharSpace, -1024);
+  assert.equal(wps.sections[0].properties.pageNumberFormat, 57);
+
+  const docx = wpsToDocxBuffer(wps, { title: "sample7" });
+  const expectedDocx = await readFile("sample/sample7/expected.docx");
+  const documentXml = readZipEntry(docx, "word/document.xml").toString("utf8");
+  const expectedDocumentXml = readZipEntry(expectedDocx, "word/document.xml").toString("utf8");
+  const stylesXml = readZipEntry(docx, "word/styles.xml").toString("utf8");
+  const expectedStylesXml = readZipEntry(expectedDocx, "word/styles.xml").toString("utf8");
+  const settingsXml = readZipEntry(docx, "word/settings.xml").toString("utf8");
+  const expectedSettingsXml = readZipEntry(expectedDocx, "word/settings.xml").toString("utf8");
+
+  assert.equal(countXmlLineEdits(documentXml, expectedDocumentXml), 0);
+  assert.equal(countXmlLineEdits(stylesXml, expectedStylesXml), 0);
+  assert.equal(countXmlLineEdits(settingsXml, expectedSettingsXml), 0);
+  assert.equal(extractSettingsNode(settingsXml, "w:zoom"), extractSettingsNode(expectedSettingsXml, "w:zoom"));
+  assert.equal(extractSettingsNode(settingsXml, "w:adjustLineHeightInTable"), extractSettingsNode(expectedSettingsXml, "w:adjustLineHeightInTable"));
+  assert.equal(extractSettingsNode(settingsXml, "w:evenAndOddHeaders"), null);
+  assert.match(documentXml, /<w:tblStyle w:val="4"\/>/);
+  assert.match(documentXml, /<w:tblpPr[^>]*w:tblpXSpec="center"[^>]*\/>/);
+  assert.match(documentXml, /<w:pgNumType w:fmt="numberInDash"\/>/);
+  assert.match(documentXml, /<w:footerReference r:id="rId3" w:type="default"\/>/);
+  assert.doesNotMatch(documentXml, /<w:tcBorders>/);
+  assert.doesNotMatch(documentXml, /<w:highlight w:val="none"\/>/);
+});
+
 test("converted DOCX maps parsed MS-DOC LIDs without unknown-language fallback", async () => {
   const sample3 = readWps(await readFile("sample/sample3/original.wps"));
   assert.equal(
