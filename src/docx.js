@@ -2168,7 +2168,16 @@ function buildLatentStylesXml(styles = [], wpsDocument = {}) {
     const name = STI_NAMES[sti];
     const latent = latentLsd[sti] ?? synthesizeLatentStyleDefaults(sti, name);
     if (!latent || !name) continue;
-    if (sti === 92 || sti === 93 || (sti >= 107 && sti <= 110) || sti === 156 || sti === 157 || sti === 178 || sti === 179 || sti === 180 || sti === 181) continue;
+    // Skip deprecated HTML/numbering styles (92-93, 107-110) which are not real
+    // paragraph/character/table styles in the OOXML latentStyles table.
+    // sti 156-157, 178-181 are newer paragraph/character styles beyond older
+    // binary LSD ranges and never appear in WPS Office DOCX latentStyles output.
+    if (sti === 92 || sti === 93 || (sti >= 107 && sti <= 110) || sti === 156 || sti === 157 || sti === 178 || sti === 180 || sti === 181) continue;
+    // MS-DOC-SPEC 2.9.145 LSD: sti=179 (List Paragraph) is a real paragraph style.
+    // Skip it only when ALL LSD fields match the w:latentStyles defaults
+    // (defQFormat=0, defSemiHidden=1, defUnhideWhenUsed=1, defUIPriority=99),
+    // in which case the lsdException would be redundant.
+    if (sti === 179 && !latent.fQFormat && latent.fSemiHidden && latent.fUnhideWhenUsed && latent.iPriority === 99) continue;
     const attrs = [];
     if (latent.fQFormat) attrs.push('w:qFormat="1"');
     if (!latent.fUnhideWhenUsed) attrs.push('w:unhideWhenUsed="0"');
