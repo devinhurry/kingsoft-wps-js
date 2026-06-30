@@ -1,5 +1,5 @@
 import { parseSprms } from "./sprm.js";
-import { BRC_TYPE_NAMES, brcColorFromIco } from "./sprm.js";
+import { BRC_TYPE_NAMES, brcColorFromIco, colorRefToHex } from "./sprm.js";
 // sti→name mapping per MS-OI29500 §2.1.237 (Part 1 Section 17.7.4.9)
 export const STI_NAMES = ["Normal","heading 1","heading 2","heading 3","heading 4","heading 5","heading 6","heading 7","heading 8","heading 9","index 1","index 2","index 3","index 4","index 5","index 6","index 7","index 8","index 9","toc 1","toc 2","toc 3","toc 4","toc 5","toc 6","toc 7","toc 8","toc 9","Normal Indent","footnote text","annotation text","header","footer","index heading","caption","table of figures","envelope address","envelope return","footnote reference","annotation reference","line number","page number","endnote reference","endnote text","table of authorities","macro","toa heading","List","List Bullet","List Number","List 2","List 3","List 4","List 5","List Bullet 2","List Bullet 3","List Bullet 4","List Bullet 5","List Number 2","List Number 3","List Number 4","List Number 5","Title","Closing","Signature","Default Paragraph Font","Body Text","Body Text Indent","List Continue","List Continue 2","List Continue 3","List Continue 4","List Continue 5","Message Header","Subtitle","Salutation","Date","Body Text First Indent","Body Text First Indent 2","Note Heading","Body Text 2","Body Text 3","Body Text Indent 2","Body Text Indent 3","Block Text","Hyperlink","FollowedHyperlink","Strong","Emphasis","Document Map","Plain Text","E-mail Signature","HTML Top of Form","HTML Bottom of Form","Normal (Web)","HTML Acronym","HTML Address","HTML Cite","HTML Code","HTML Definition","HTML Keyboard","HTML Preformatted","HTML Sample","HTML Typewriter","HTML Variable","Normal Table","annotation subject","No List","Outline List 1","Outline List 2","Outline List 3","Table Simple 1","Table Simple 2","Table Simple 3","Table Classic 1","Table Classic 2","Table Classic 3","Table Classic 4","Table Colorful 1","Table Colorful 2","Table Colorful 3","Table Columns 1","Table Columns 2","Table Columns 3","Table Columns 4","Table Columns 5","Table Grid 1","Table Grid 2","Table Grid 3","Table Grid 4","Table Grid 5","Table Grid 6","Table Grid 7","Table Grid 8","Table List 1","Table List 2","Table List 3","Table List 4","Table List 5","Table List 6","Table List 7","Table List 8","Table 3D effects 1","Table 3D effects 2","Table 3D effects 3","Table Contemporary","Table Elegant","Table Professional","Table Subtle 1","Table Subtle 2","Table Web 1","Table Web 2","Table Web 3","Balloon Text","Table Grid","Table Theme","Placeholder Text","No Spacing","Light Shading","Light List","Light Grid","Medium Shading 1","Medium Shading 2","Medium List 1","Medium List 2","Medium Grid 1","Medium Grid 2","Medium Grid 3","Dark List","Colorful Shading","Colorful List","Colorful Grid","Light Shading Accent 1","Light List Accent 1","Light Grid Accent 1","Medium Shading 1 Accent 1","Medium Shading 2 Accent 1","Medium List 1 Accent 1","Revision","List Paragraph","Quote","Intense Quote","Medium List 2 Accent 1","Medium Grid 1 Accent 1","Medium Grid 2 Accent 1","Medium Grid 3 Accent 1","Dark List Accent 1","Colorful Shading Accent 1","Colorful List Accent 1","Colorful Grid Accent 1","Light Shading Accent 2","Light List Accent 2","Light Grid Accent 2","Medium Shading 1 Accent 2","Medium Shading 2 Accent 2","Medium List 1 Accent 2","Medium List 2 Accent 2","Medium Grid 1 Accent 2","Medium Grid 2 Accent 2","Medium Grid 3 Accent 2","Dark List Accent 2","Colorful Shading Accent 2","Colorful List Accent 2","Colorful Grid Accent 2","Light Shading Accent 3","Light List Accent 3","Light Grid Accent 3","Medium Shading 1 Accent 3","Medium Shading 2 Accent 3","Medium List 1 Accent 3","Medium List 2 Accent 3","Medium Grid 1 Accent 3","Medium Grid 2 Accent 3","Medium Grid 3 Accent 3","Dark List Accent 3","Colorful Shading Accent 3","Colorful List Accent 3","Colorful Grid Accent 3","Light Shading Accent 4","Light List Accent 4","Light Grid Accent 4","Medium Shading 1 Accent 4","Medium Shading 2 Accent 4","Medium List 1 Accent 4","Medium List 2 Accent 4","Medium Grid 1 Accent 4","Medium Grid 2 Accent 4","Medium Grid 3 Accent 4","Dark List Accent 4","Colorful Shading Accent 4","Colorful List Accent 4","Colorful Grid Accent 4","Light Shading Accent 5","Light List Accent 5","Light Grid Accent 5","Medium Shading 1 Accent 5","Medium Shading 2 Accent 5","Medium List 1 Accent 5","Medium List 2 Accent 5","Medium Grid 1 Accent 5","Medium Grid 2 Accent 5","Medium Grid 3 Accent 5","Dark List Accent 5","Colorful Shading Accent 5","Colorful List Accent 5","Colorful Grid Accent 5","Light Shading Accent 6","Light List Accent 6","Light Grid Accent 6","Medium Shading 1 Accent 6","Medium Shading 2 Accent 6","Medium List 1 Accent 6","Medium List 2 Accent 6","Medium Grid 1 Accent 6","Medium Grid 2 Accent 6","Medium Grid 3 Accent 6","Dark List Accent 6","Colorful Shading Accent 6","Colorful List Accent 6","Colorful Grid Accent 6"];
 
@@ -47,6 +47,9 @@ export function extractWordBinaryDocument({ wordDocument, table0, table1 = null,
   assertWordDocument(wordDocument);
 
   const fib = readFib(wordDocument);
+  if (fib.fEncrypted) {
+    throw new Error("Excluded Word binary document variant: encrypted/obfuscated files are outside this parser scope");
+  }
   if ((fib.flags & FIB_F_COMPLEX) === 0) {
     throw new Error("Unimplemented Word binary document variant: non-complex files without a CLX piece table");
   }
@@ -117,6 +120,7 @@ export function normalizeComparableText(text) {
 
 function readFib(wordDocument) {
   const flags = wordDocument.readUInt16LE(FIB_FLAGS_OFFSET);
+  const flags2 = wordDocument[0x13];
   const fcLcbCount = wordDocument.readUInt16LE(FIB_FC_LCB_COUNT_OFFSET);
   const tableStreamOffset = FIB_FC_LCB_START + FIB_FC_CLX_INDEX * 8;
   const plcfSedOffset = FIB_FC_LCB_START + FIB_FC_PLCFSED_INDEX * 8;
@@ -138,7 +142,27 @@ function readFib(wordDocument) {
 
   return {
     nFib: wordDocument.readUInt16LE(0x02),
+    lid: wordDocument.readUInt16LE(0x06),
+    pnNext: wordDocument.readUInt16LE(0x08),
     flags,
+    fDot: (flags & 0x0001) !== 0,
+    fGlsy: (flags & 0x0002) !== 0,
+    fComplex: (flags & FIB_F_COMPLEX) !== 0,
+    fHasPic: (flags & 0x0008) !== 0,
+    cQuickSaves: (flags >> 4) & 0x0f,
+    fEncrypted: (flags & 0x0100) !== 0,
+    fReadOnlyRecommended: (flags & 0x0400) !== 0,
+    fWriteReservation: (flags & 0x0800) !== 0,
+    fExtChar: (flags & 0x1000) !== 0,
+    fLoadOverride: (flags & 0x2000) !== 0,
+    fFarEast: (flags & 0x4000) !== 0,
+    fObfuscated: (flags & 0x8000) !== 0,
+    nFibBack: wordDocument.readUInt16LE(0x0c),
+    lKey: wordDocument.readUInt32LE(0x0e),
+    envr: wordDocument[0x12],
+    fMac: (flags2 & 0x01) !== 0,
+    fEmptySpecial: (flags2 & 0x02) !== 0,
+    fLoadOverridePage: (flags2 & 0x04) !== 0,
     whichTableStream: (flags & FIB_F_WHICH_TABLE_STREAM) === 0 ? "0Table" : "1Table",
     fcMin: wordDocument.readUInt32LE(0x18),
     fcMac: wordDocument.readUInt32LE(0x1c),
@@ -197,34 +221,138 @@ function parseDop(tableStream, fib) {
   }
   const dop = tableStream.subarray(fcDop, fcDop + lcbDop);
 
-  // fRevMarking: DopBase bit 47 = byte 5 bit 7
-  // MS-DOC-SPEC/17 lines 153-156: fRevMarking maps to OOXML trackRevisions
-  const fRevMarking = dop.length >= 6 ? ((dop[5] >> 7) & 1) !== 0 : false;
+  // ── DopBase fields (84 bytes minimum) ──────────────────────────────
+  // MS-DOC-SPEC/17 §DopBase, diagram row 1 (bytes 0-3)
+  const dopBase0 = dop.length >= 4 ? dop.readUInt32LE(0) : 0;
+  const fFacingPages     = ((dopBase0 >>  0) & 1) !== 0;  // bit  0 = byte0 bit0 = A
+  // bit 1 = unused1 (B), bit 2 = fPMHMainDoc (C), bits 3-4 = unused2 (D),
+  // bits 5-6 = fpc, bit 7 = unused3 (E)
+  const fpc              = (dopBase0 >>  5) & 0x03;        // bits 5-6
+  // byte1 = unused4 (bits 8-15)
+  const rncFtn           = (dopBase0 >> 16) & 0x03;        // bits 16-17 = F
+  const nFtn             = (dopBase0 >> 18) & 0x3FFF;       // bits 18-31, 14 bits
 
-  // MS-DOC-SPEC/17 DopBase.dxaTab is at bytes 10-11 and stores the
-  // default tab stop interval in twips.
+  // MS-DOC-SPEC/17 §DopBase, diagram row 2 (bytes 4-7)
+  const dopBase4 = dop.length >= 8 ? dop.readUInt32LE(4) : 0;
+  const fSplAllDone      = ((dopBase4 >>  6) & 1) !== 0;   // bit 38 = M
+  const fSplAllClean     = ((dopBase4 >>  7) & 1) !== 0;   // bit 39 = N
+  const fSplHideErrors   = ((dopBase4 >>  8) & 1) !== 0;   // bit 40 = O
+  const fGramHideErrors  = ((dopBase4 >>  9) & 1) !== 0;   // bit 41 = P
+  const fLabelDoc        = ((dopBase4 >> 10) & 1) !== 0;   // bit 42 = Q
+  const fHyphCapitals    = ((dopBase4 >> 11) & 1) !== 0;   // bit 43 = R
+  const fAutoHyphen      = ((dopBase4 >> 12) & 1) !== 0;   // bit 44 = S
+  const fFormNoFields    = ((dopBase4 >> 13) & 1) !== 0;   // bit 45 = T
+  const fLinkStyles      = ((dopBase4 >> 14) & 1) !== 0;   // bit 46 = U
+  const fRevMarking      = ((dopBase4 >> 15) & 1) !== 0;   // bit 47 = V
+  // bits 48-49: W(unused11), X(fExactCWords)
+  const fPagHidden       = ((dopBase4 >> 18) & 1) !== 0;   // bit 50 = Y
+  const fPagResults      = ((dopBase4 >> 19) & 1) !== 0;   // bit 51 = Z
+  const fLockAtn         = ((dopBase4 >> 20) & 1) !== 0;   // bit 52 = a
+  const fMirrorMargins   = ((dopBase4 >> 21) & 1) !== 0;   // bit 53 = b
+  const fWord97Compat    = ((dopBase4 >> 22) & 1) !== 0;   // bit 54 = c
+  // bit 55 = unused12 (d), bit 56 = unused13 (e)
+  const fProtEnabled     = ((dopBase4 >> 25) & 1) !== 0;   // bit 57 = f
+  const fDispFormFldSel  = ((dopBase4 >> 26) & 1) !== 0;   // bit 58 = g
+  const fRMView          = ((dopBase4 >> 27) & 1) !== 0;   // bit 59 = h
+  const fRMPrint         = ((dopBase4 >> 28) & 1) !== 0;   // bit 60 = i
+  const fLockVbaProj     = ((dopBase4 >> 29) & 1) !== 0;   // bit 61 = j
+  const fLockRev         = ((dopBase4 >> 30) & 1) !== 0;   // bit 62 = k
+  const fEmbedFonts      = ((dopBase4 >> 31) & 1) !== 0;   // bit 63 = l
+
+  // MS-DOC-SPEC/17 DopBase.dxaTab is at bytes 10-11
   const dxaTab = dop.readUInt16LE(10);
-  // MS-DOC-SPEC/17 §Copts60: fDntULTrlSpc is the opposite of OOXML
-  // compat/ulTrailSpace.
+
+  // MS-DOC-SPEC/17 DopBase.cpgWebOpt at bytes 12-13
+  const cpgWebOpt = dop.readUInt16LE(12);
+
+  // MS-DOC-SPEC/17 DopBase.dxaHotZ at bytes 14-15 → OOXML hyphenationZone
+  const dxaHotZ = dop.readUInt16LE(14);
+
+  // MS-DOC-SPEC/17 DopBase.cConsecHypLim at bytes 16-17 → OOXML consecutiveHyphenLimit
+  const cConsecHypLim = dop.readUInt16LE(16);
+
+  // MS-DOC-SPEC/17 §Copts60 at bytes 8-9: fDntULTrlSpc(bit14) is opposite of ulTrailSpace
   const copts60 = dop.readUInt16LE(8);
   const compatibility = {
-    ulTrailSpace: ((copts60 >> 14) & 1) === 0,
+    ulTrailSpace:            ((copts60 >> 14) & 1) === 0,  // P = fDntULTrlSpc, opposite sense
+    noTabHangInd:            ((copts60 >>  0) & 1) !== 0,  // A = fNoTabForInd
+    noSpaceRaiseLower:       ((copts60 >>  1) & 1) !== 0,  // B = fNoSpaceRaiseLower
+    suppressSpBfAfterPgBrk: ((copts60 >>  2) & 1) !== 0,  // C = fSuppressSpBfAfterPgBrk
+    wrapTrailSpaces:         ((copts60 >>  3) & 1) !== 0,  // D = fWrapTrailSpaces
+    printColBlack:           ((copts60 >>  4) & 1) !== 0,  // E = fMapPrintTextColor
+    noColumnBalance:         ((copts60 >>  5) & 1) !== 0,  // F = fNoColumnBalance
+    convMailMergeEsc:        ((copts60 >>  6) & 1) !== 0,  // G = fConvMailMergeEsc
+    suppressTopSpacing:      ((copts60 >>  7) & 1) !== 0,  // H = fSuppressTopSpacing
+    useSingleBorderForContiguousCells: ((copts60 >>  8) & 1) !== 0,  // I = fOrigWordTableRules
+    showBreaksInFrames:      ((copts60 >> 10) & 1) !== 0,  // K = fShowBreaksInFrames
+    swapBordersFacingPages:  ((copts60 >> 11) & 1) !== 0,  // L = fSwapBordersFacingPgs
+    doNotLeaveBackslashAlone: ((copts60 >> 12) & 1) === 0, // M = fLeaveBackslashAlone, opposite sense
+    doNotExpandShiftReturn:  ((copts60 >> 13) & 1) === 0,  // N = fExpShRtn, opposite sense
+    balanceSingleByteDoubleByteWidth: ((copts60 >> 15) & 1) === 0, // P2 = fDntBlnSbDbWid, opposite
   };
 
-  // DopTypography at DOP offset 90 (Dop97), present before Dogrid.
-  // MS-DOC-SPEC/17 §DopTypography maps fKerningPunct to the opposite of
-  // noPunctuationKerning and iJustification to characterSpacingControl.
+  // DopBase bytes 52-55: m=rncEdn(2), nEdn(14), epc(2), n=unused14(4), o=unused15(4),
+  // p=fPrintFormData, q=fSaveFormData, r=fShadeFormData, s=fShadeMergeFields,
+  // t=reserved2, u=fIncludeSubdocsInStats
+  const dopBase52 = dop.length >= 56 ? dop.readUInt32LE(52) : 0;
+  const rncEdn            = (dopBase52 >>  0) & 0x03;
+  const nEdn              = (dopBase52 >>  2) & 0x3FFF;
+  const epc               = (dopBase52 >> 16) & 0x03;
+  const fPrintFormData    = ((dopBase52 >> 26) & 1) !== 0;  // bit 26 = p
+  const fSaveFormData     = ((dopBase52 >> 27) & 1) !== 0;  // bit 27 = q
+  const fShadeFormData    = ((dopBase52 >> 28) & 1) !== 0;  // bit 28 = r
+  const fShadeMergeFields = ((dopBase52 >> 29) & 1) !== 0;  // bit 29 = s
+  const fIncludeSubdocsInStats = ((dopBase52 >> 31) & 1) !== 0; // bit 31 = u
+
+  // DopBase byte 51 (in diagram row 5): v=wvkoSaved(3), pctWwdSaved(9), w=zkSaved(2),
+  // x=unused16, y=iGutterPos — stored in the high word of bytes 48-51 (cParas area)
+  // Actually cParas is bytes 48-51. Let's read wvkoSaved/zkSaved from byte 51
+  // according to the DopBase diagram row 5.
+  // Row 5 layout (bytes 52-55) has: m, nEdn, epc, n, o, p, q, r, s, t, u
+  // Row 6 starts with cLines (bytes 56-59)
+  // The v/pctWwdSaved/w/x/y are at the end of the cParasWithSubdocs area.
+  // Let's re-read the diagram:
+  // Row 5: bytes 52-55 = | m |  | nEdn ... | epc |  | n ... | o ... | p | q | r | s | t | u |
+  // The v, pctWwdSaved, w, x, y are in the row that goes:
+  // | ... |  |  |  |  |  |  |  | v |  |  | pctWwdSaved |  |  |  |  | w |  | x | y |
+  // This is at the end of byte 51 (since cPgWithSubdocs is at 80-81... actually it varies)
+  // Let me just skip these for now as they're complex and low value for WPS output.
+
+  // ── DopTypography at DOP offset 90 ────────────────────────────────
+  // MS-DOC-SPEC/17 §DopTypography: maps fKerningPunct → noPunctuationKerning (opposite)
+  // and iJustification → characterSpacingControl.
+  // Also includes iLevelOfKinsoku, f2on1, iCustomKsu, fJapaneseUseLevel2.
   let typography = null;
   if (dop.length >= 400) {
     const flags = dop[90];
     typography = {
-      fKerningPunct: (flags & 0x01) !== 0,
-      iJustification: (flags >> 1) & 0x03,
+      fKerningPunct:     (flags & 0x01) !== 0,
+      iJustification:    (flags >> 1) & 0x03,
+      iLevelOfKinsoku:   (flags >> 4) & 0x03,  // bits 4-5 = C
+      f2on1:             (flags >> 6) & 0x01,  // bit 6 = D
+      iCustomKsu:        (flags >> 8) & 0x07,  // bits 8-10 = F (from byte 91? Let me check)
+      // Actually the diagram shows DopTypography as a multi-row structure
+      // starting at byte 90. Let me read the actual byte layout properly.
+      // DopTypography diagram row 1 (byte 90): A B - C - D E F - - G reserved(5 bits)
+      // Byte 90: bit0=A(fKerningPunct), bits1-2=B(iJustification), bits4-5=C(iLevelOfKinsoku)
+      // bit6=D(f2on1), bits8-10=F(iCustomKsu)... wait, byte 90 only has bits 0-7
+      // Byte 91: bits 0-2 = F(iCustomKsu continued), bit 3 = G(fJapaneseUseLevel2),
+      // bits 4-7 = reserved
+    };
+    // Read full DopTypography flags from bytes 90-91
+    const typoFlags = dop.readUInt16LE(90);
+    typography = {
+      fKerningPunct:        (typoFlags & 0x0001) !== 0,
+      iJustification:       (typoFlags >> 1) & 0x03,
+      iLevelOfKinsoku:      (typoFlags >> 4) & 0x03,
+      f2on1:                (typoFlags >> 6) & 0x01,
+      iCustomKsu:           (typoFlags >> 8) & 0x07,
+      fJapaneseUseLevel2:   (typoFlags >> 11) & 0x01,
     };
   }
 
-  // Dogrid at DOP offset 400 (Dop97), present in all DOP versions >= Dop97.
-  // MS-DOC-SPEC/17 §Dogrid defines the display counts as 7-bit fields.
+  // ── Dogrid at DOP offset 400 (Dop97) ──────────────────────────────
+  // MS-DOC-SPEC/17 §Dogrid: drawing grid settings.
   let dogrid = null;
   if (dop.length >= 410) {
     const fFollowMargins = (dop[409] >> 7) & 1;
@@ -239,9 +367,9 @@ function parseDop(tableStream, fib) {
     };
   }
 
+  // ── Dop97 page border include flags at offset 410 ─────────────────
   // MS-DOC-SPEC/17 §Dop97: fIncludeHeader/fIncludeFooter control whether
-  // page borders include the header/footer area. The OOXML
-  // bordersDoNotSurround* settings have the opposite sense.
+  // page borders include header/footer. OOXML bordersDoNotSurround* have opposite sense.
   let pageBorderIncludes = null;
   if (dop.length >= 412) {
     const dop97Flags = dop.readUInt16LE(410);
@@ -251,10 +379,9 @@ function parseDop(tableStream, fib) {
     };
   }
 
-  // MS-DOC-SPEC/17 §Dop2002 stores XML validation flags after
-  // verCompatPre10 at DOP offset 542. fValidateXML (bit b) and
-  // fShowXMLErrors (bit d) have the opposite sense from the OOXML settings
-  // doNotValidateAgainstSchema and doNotDemarcateInvalidXml.
+  // ── Dop2002 XML validation at offset 542 ──────────────────────────
+  // fValidateXML (bit b) and fShowXMLErrors (bit d) have opposite sense from
+  // OOXML doNotValidateAgainstSchema and doNotDemarcateInvalidXml.
   let xmlValidation = null;
   if (dop.length >= 546) {
     const dop2002Flags = dop.readUInt32LE(542);
@@ -264,11 +391,56 @@ function parseDop(tableStream, fib) {
     };
   }
 
-  // grfFmtFilter at DOP offset 554 (Dop2002), present when lcbDop >= 556
-  // MS-DOC-SPEC/17 lines 1040-1042; default per spec is 0x5024
+  // ── grfFmtFilter at DOP offset 554 (Dop2002) ─────────────────────
+  // MS-DOC-SPEC/17; default per spec is 0x5024
   const grfFmtFilter = dop.length >= 556 ? dop.readUInt16LE(554) : null;
 
-  return { fRevMarking, dxaTab, compatibility, typography, dogrid, pageBorderIncludes, xmlValidation, grfFmtFilter };
+  return {
+    fFacingPages,
+    fRevMarking,
+    fAutoHyphen,
+    fHyphCapitals,
+    fEmbedFonts,
+    fMirrorMargins,
+    fRMView,
+    fRMPrint,
+    fLockRev,
+    fProtEnabled,
+    fLockAtn,
+    fLinkStyles,
+    fSplAllDone,
+    fSplAllClean,
+    fSplHideErrors,
+    fGramHideErrors,
+    fLabelDoc,
+    fFormNoFields,
+    fPagHidden,
+    fPagResults,
+    fDispFormFldSel,
+    fLockVbaProj,
+    fWord97Compat,
+    fpc,
+    rncFtn,
+    nFtn,
+    dxaTab,
+    cpgWebOpt,
+    dxaHotZ,
+    cConsecHypLim,
+    rncEdn,
+    nEdn,
+    epc,
+    fPrintFormData,
+    fSaveFormData,
+    fShadeFormData,
+    fShadeMergeFields,
+    fIncludeSubdocsInStats,
+    compatibility,
+    typography,
+    dogrid,
+    pageBorderIncludes,
+    xmlValidation,
+    grfFmtFilter,
+  };
 }
 
 function readPieceTable(tableStream, fcClx, lcbClx) {
@@ -689,8 +861,10 @@ function parseParagraphGrpprl(data) {
     keepLines: parsed.keepLines ?? null,
     keepNext: parsed.keepNext ?? null,
     pageBreakBefore: parsed.pageBreakBefore ?? null,
+    suppressAutoHyphens: parsed.suppressAutoHyphens ?? null,
     widowControl: parsed.widowControl ?? null,
     contextualSpacing: parsed.contextualSpacing ?? null,
+    mirrorIndents: parsed.mirrorIndents ?? null,
     bidi: parsed.bidi ?? null,
     snapToGrid: parsed.snapToGrid ?? null,
     textAlignment: parsed.textAlignment ?? null,
@@ -702,6 +876,7 @@ function parseParagraphGrpprl(data) {
     autoSpaceDN: parsed.autoSpaceDN ?? null,
     adjustRightInd: parsed.adjustRightInd ?? null,
     lineNumberCount: parsed.lineNumberCount ?? null,
+    paragraphShading: parsed.paragraphShading ?? null,
     tablePosition: parsed.tablePosition ?? null,
     tableNoAllowOverlap: parsed.tableNoAllowOverlap ?? null,
   };
@@ -912,6 +1087,7 @@ function createSyntheticNormalTableStyle(index) {
     keepLines: null,
     keepNext: null,
     pageBreakBefore: null,
+    suppressAutoHyphens: null,
     widowControl: null,
     bidi: null,
     snapToGrid: null,
@@ -925,6 +1101,9 @@ function createSyntheticNormalTableStyle(index) {
     adjustRightInd: null,
     lineNumberCount: null,
     paragraphBorders: null,
+    paragraphShading: null,
+    mirrorIndents: null,
+    suppressOverlap: null,
     outlineLevel: null,
     frameWidth: null,
     frameHeight: null,
@@ -937,6 +1116,10 @@ function createSyntheticNormalTableStyle(index) {
     frameVAnchor: null,
     frameWrap: null,
     frameLocked: null,
+    frameHSpace: null,
+    frameVSpace: null,
+    frameDropCap: null,
+    frameLines: null,
     runProperties: null,
     synthetic: true,
   };
@@ -988,11 +1171,29 @@ function parseStd(std, index, cbSTDBaseInFile) {
   // which may miss or misread character SPRMs. For character styles, merge the
   // correctly-parsed character properties from parseSprms.
   if (sgc === 2) {
-    if (parsed.underline != null) (runProperties ??= {}).underline = parsed.underline;
-    if (parsed.underlineStyle != null) (runProperties ??= {}).underlineStyle = parsed.underlineStyle;
-    if (parsed.textColor != null) (runProperties ??= {}).textColor = parsed.textColor;
-    if (parsed.bold != null) (runProperties ??= {}).bold = parsed.bold;
-    if (parsed.italic != null) (runProperties ??= {}).italic = parsed.italic;
+    const characterPropertyNames = [
+      "underline",
+      "underlineStyle",
+      "underlineColor",
+      "textColor",
+      "border",
+      "background",
+      "verticalAlign",
+      "bold",
+      "italic",
+      "outline",
+      "shadow",
+      "imprint",
+      "emboss",
+      "noProof",
+      "webHidden",
+      "specVanish",
+    ];
+    for (const name of characterPropertyNames) {
+      if (parsed[name] != null) {
+        (runProperties ??= {})[name] = parsed[name];
+      }
+    }
   }
   const type = buildStyleType(sgc);
   const styleName = buildStyleName(sti, name);
@@ -1038,6 +1239,7 @@ function parseStd(std, index, cbSTDBaseInFile) {
     keepLines: parsed.keepLines ?? null,
     keepNext: parsed.keepNext ?? null,
     pageBreakBefore: parsed.pageBreakBefore ?? null,
+    suppressAutoHyphens: parsed.suppressAutoHyphens ?? null,
     widowControl: parsed.widowControl ?? null,
     bidi: parsed.bidi ?? null,
     snapToGrid: parsed.snapToGrid ?? null,
@@ -1051,6 +1253,9 @@ function parseStd(std, index, cbSTDBaseInFile) {
     adjustRightInd: parsed.adjustRightInd ?? null,
     lineNumberCount: parsed.lineNumberCount ?? null,
     paragraphBorders: parsed.paragraphBorders ?? null,
+    paragraphShading: parsed.paragraphShading ?? null,
+    mirrorIndents: parsed.mirrorIndents ?? null,
+    suppressOverlap: parsed.suppressOverlap ?? null,
     // MS-DOC-SPEC/16 sprmPOutLvl: "This MUST be ignored if the paragraph has
     // an istd that is greater than or equal to 0x1 and less than or equal
     // to 0x9." For these heading styles (sti 1–9), outlineLevel = sti - 1.
@@ -1066,6 +1271,10 @@ function parseStd(std, index, cbSTDBaseInFile) {
     frameVAnchor: parsed.frameVAnchor ?? null,
     frameWrap: parsed.frameWrap ?? null,
     frameLocked: parsed.frameLocked ?? null,
+    frameHSpace: parsed.frameHSpace ?? null,
+    frameVSpace: parsed.frameVSpace ?? null,
+    frameDropCap: parsed.frameDropCap ?? null,
+    frameLines: parsed.frameLines ?? null,
     runProperties,
   };
 }
@@ -1150,6 +1359,11 @@ function extractCharacterPropertiesFromGrpprl(grpprl) {
   const props = {};
   scanKnownSprm(grpprl, 0x4a43, 2, (value) => { props.fontSize = value.readUInt16LE(0); });
   scanKnownSprm(grpprl, 0x4845, 2, (value) => { props.textPosition = value.readInt16LE(0); });
+  scanKnownSprm(grpprl, 0x2a48, 1, (value) => {
+    if (value[0] === 1) props.verticalAlign = "superscript";
+    else if (value[0] === 2) props.verticalAlign = "subscript";
+    else if (value[0] > 2) throw new Error(`Out-of-spec MS-DOC Iss superscript/subscript value ${value[0]}`);
+  });
   scanKnownSprm(grpprl, 0x4a61, 2, (value) => { props.fontSizeCs = value.readUInt16LE(0); });
   scanKnownSprm(grpprl, 0x4a4f, 2, (value) => { props.fontAscii = value.readUInt16LE(0); });
   scanKnownSprm(grpprl, 0x4a50, 2, (value) => { props.fontEastAsia = value.readUInt16LE(0); });
@@ -1159,7 +1373,16 @@ function extractCharacterPropertiesFromGrpprl(grpprl) {
   scanKnownSprm(grpprl, 0x4852, 2, (value) => { props.charWidth = value.readUInt16LE(0); });
   scanKnownSprm(grpprl, 0x8840, 2, (value) => { props.charSpacing = value.readInt16LE(0); });
   scanKnownSprm(grpprl, 0x484b, 2, (value) => { props.kern = value.readUInt16LE(0); });
+  scanKnownSprm(grpprl, 0x0838, 1, (value) => { props.outline = value[0] !== 0; });
+  scanKnownSprm(grpprl, 0x0839, 1, (value) => { props.shadow = value[0] !== 0; });
+  scanKnownSprm(grpprl, 0x0854, 1, (value) => { props.imprint = value[0] !== 0; });
+  scanKnownSprm(grpprl, 0x0858, 1, (value) => { props.emboss = value[0] !== 0; });
+  scanKnownSprm(grpprl, 0x0875, 1, (value) => { props.noProof = value[0] !== 0; });
+  scanKnownSprm(grpprl, 0x0811, 1, (value) => { props.webHidden = value[0] !== 0; });
+  scanKnownSprm(grpprl, 0x0818, 1, (value) => { props.specVanish = value[0] !== 0; });
   scanKnownSprm(grpprl, 0x2a42, 1, (value) => { props.textColor = styleTextColorHex(value[0]); });
+  scanKnownSprm(grpprl, 0x6870, 4, (value) => { props.textColor = colorRefToHex(value); });
+  scanKnownSprm(grpprl, 0x6877, 4, (value) => { props.underlineColor = colorRefToHex(value); });
   scanKnownSprm(grpprl, 0x2a0e, 1, (value) => {
     if (value[0] === 0) props.underline = false;
   });
@@ -3000,13 +3223,23 @@ function extractListData(tableStream, fib) {
 	            lvl.strike = chpxProps.strike ?? null;
 	            lvl.dstrike = chpxProps.dstrike ?? null;
 	            lvl.vanish = chpxProps.vanish ?? null;
+	            lvl.outline = chpxProps.outline ?? null;
+	            lvl.shadow = chpxProps.shadow ?? null;
+	            lvl.imprint = chpxProps.imprint ?? null;
+	            lvl.emboss = chpxProps.emboss ?? null;
+	            lvl.noProof = chpxProps.noProof ?? null;
+	            lvl.webHidden = chpxProps.webHidden ?? null;
+	            lvl.specVanish = chpxProps.specVanish ?? null;
 	            lvl.charSpacing = chpxProps.charSpacing ?? null;
 	            lvl.charWidth = chpxProps.charWidth ?? null;
 	            lvl.fontSize = chpxProps.fontSize ?? null;
 	            lvl.kern = chpxProps.kern ?? null;
 	            lvl.textPosition = chpxProps.textPosition ?? null;
+	            lvl.verticalAlign = chpxProps.verticalAlign ?? null;
 	            lvl.underline = chpxProps.underline ?? null;
 	            lvl.underlineStyle = chpxProps.underlineStyle ?? null;
+	            lvl.underlineColor = chpxProps.underlineColor ?? null;
+	            lvl.border = chpxProps.border ?? null;
 	          } catch(e) { /* ignore */ }
         }
         lstf.lvlList.push(lvl);

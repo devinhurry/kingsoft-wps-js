@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { readWps, normalizeComparableText } from "../src/index.js";
 import { wpsToDocxBuffer } from "../src/docx.js";
 import { lcidToBcp47 } from "../src/lcid.js";
-import { BRC_TYPE_NAMES, brcColorFromIco } from "../src/sprm.js";
+import { BRC_TYPE_NAMES, brcColorFromIco, parseSprms } from "../src/sprm.js";
 import { parseSectionSprms } from "../src/word-binary.js";
 import { readDocxMainText, readDocxDocumentXml, readZipEntry } from "./fixtures-docx.js";
 
@@ -73,6 +73,16 @@ test("lists and reads OLE2 streams from a WPS file", async () => {
     ],
   );
   assert.equal(document.fib.whichTableStream, "0Table");
+  assert.equal(document.fib.lid, 0x0409);
+  assert.equal(document.fib.pnNext, 0);
+  assert.equal(document.fib.fDot, false);
+  assert.equal(document.fib.fGlsy, false);
+  assert.equal(document.fib.fComplex, true);
+  assert.equal(document.fib.fEncrypted, false);
+  assert.equal(document.fib.fExtChar, true);
+  assert.equal(document.fib.nFibBack, 0x00bf);
+  assert.equal(document.fib.lKey, 0);
+  assert.equal(document.fib.envr, 0);
   assert.equal(document.fib.characterCounts.body, 11098);
   assert.match(document.text, /重庆市青年就业见习实施办法/);
   assert.match(document.text, /就业见习补贴标准/);
@@ -238,6 +248,21 @@ test("sample3 settings.xml matches WPS expected export without metadata noise", 
 
 test("sample5 settings use parsed DOP typography, grid display, and XML validation flags", async () => {
   const wps = readWps(await readFile("sample/sample5/original.wps"));
+  assert.equal(wps.dop.fFacingPages, false);
+  assert.equal(wps.dop.fpc, 1);
+  assert.equal(wps.dop.rncFtn, 0);
+  assert.equal(wps.dop.nFtn, 1);
+  assert.equal(wps.dop.fProtEnabled, false);
+  assert.equal(wps.dop.fAutoHyphen, false);
+  assert.equal(wps.dop.cpgWebOpt, 20936);
+  assert.equal(wps.dop.dxaHotZ, 360);
+  assert.equal(wps.dop.cConsecHypLim, 0);
+  assert.equal(wps.dop.rncEdn, 0);
+  assert.equal(wps.dop.nEdn, 1);
+  assert.equal(wps.dop.epc, 3);
+  assert.equal(wps.dop.compatibility.noColumnBalance, false);
+  assert.equal(wps.dop.compatibility.convMailMergeEsc, false);
+  assert.equal(wps.dop.compatibility.suppressTopSpacing, false);
   assert.equal(wps.dop.dogrid.dxGridDisplay, 0);
   assert.equal(wps.dop.typography.fKerningPunct, true);
   assert.equal(wps.dop.grfFmtFilter, 0x5024);
@@ -741,6 +766,179 @@ test("MS-DOC border color and type enums use spec values without fallback", () =
   assert.equal(BRC_TYPE_NAMES[0x14], "wave");
   assert.equal(BRC_TYPE_NAMES[0x1B], "inset");
   assert.equal(BRC_TYPE_NAMES[0x02], undefined);
+});
+
+test("parses MS-DOC character effect toggle SPRMs", () => {
+  const props = parseSprms(Buffer.from([
+    0x38, 0x08, 0x01, // sprmCFOutline
+    0x39, 0x08, 0x01, // sprmCFShadow
+    0x54, 0x08, 0x01, // sprmCFImprint
+    0x58, 0x08, 0x01, // sprmCFEmboss
+    0x75, 0x08, 0x01, // sprmCFNoProof
+    0x11, 0x08, 0x01, // sprmCFWebHidden
+    0x18, 0x08, 0x01, // sprmCFSpecVanish
+    0x48, 0x2a, 0x01, // sprmCIss superscript
+    0x70, 0x68, 0x12, 0x34, 0x56, 0x00, // sprmCCv COLORREF
+    0x77, 0x68, 0x9a, 0xbc, 0xde, 0x00, // sprmCCvUl COLORREF
+  ]));
+
+  assert.equal(props.outline, true);
+  assert.equal(props.shadow, true);
+  assert.equal(props.imprint, true);
+  assert.equal(props.emboss, true);
+  assert.equal(props.noProof, true);
+  assert.equal(props.webHidden, true);
+  assert.equal(props.specVanish, true);
+  assert.equal(props.verticalAlign, "superscript");
+  assert.equal(props.textColor, "123456");
+  assert.equal(props.underlineColor, "9ABCDE");
+});
+
+test("parses MS-DOC character and paragraph border operands", () => {
+  const props = parseSprms(Buffer.from([
+    0x72, 0xca, 0x08, 0x12, 0x34, 0x56, 0x00, 0x06, 0x01, 0x07, 0x00,
+    0x4e, 0xc6, 0x08, 0x01, 0x02, 0x03, 0x00, 0x08, 0x03, 0x04, 0x00,
+    0x71, 0xca, 0x0a, 0x11, 0x22, 0x33, 0x00, 0x44, 0x55, 0x66, 0x00, 0x08, 0x00,
+    0x4d, 0xc6, 0x0a, 0xaa, 0xbb, 0xcc, 0x00, 0x12, 0x34, 0x56, 0x00, 0x01, 0x00,
+    0x2a, 0x24, 0x01, // sprmPFNoAutoHyph
+    0x70, 0x24, 0x01, // sprmPFMirrorIndents
+    0x62, 0x24, 0x01, // sprmPFNoAllowOverlap
+    0x2c, 0x44, 0x1a, 0x00, // sprmPDcs: fdct=margin, cl=3
+    0x2e, 0x84, 0x78, 0x00, // sprmPDyaFromText
+    0x2f, 0x84, 0x34, 0x12, // sprmPDxaFromText
+  ]));
+
+  assert.deepEqual(props.border, {
+    val: "single",
+    color: "123456",
+    sz: "6",
+    space: "0",
+  });
+  assert.deepEqual(props.paragraphBorders.top, {
+    val: "double",
+    color: "010203",
+    sz: "8",
+    space: "4",
+  });
+  assert.deepEqual(props.background, {
+    val: "pct50",
+    color: "112233",
+    fill: "445566",
+  });
+  assert.deepEqual(props.paragraphShading, {
+    val: "solid",
+    color: "AABBCC",
+    fill: "123456",
+  });
+  assert.equal(props.suppressAutoHyphens, true);
+  assert.equal(props.mirrorIndents, true);
+  assert.equal(props.suppressOverlap, true);
+  assert.equal(props.frameDropCap, "margin");
+  assert.equal(props.frameLines, 3);
+  assert.equal(props.frameVSpace, 120);
+  assert.equal(props.frameHSpace, 0x1234);
+});
+
+test("emits parsed paragraph frame properties to DOCX framePr", () => {
+  const docx = wpsToDocxBuffer({
+    bodyText: "A\r",
+    defaultTabStop: 720,
+    paragraphProperties: [{
+      frameWidth: 1440,
+      frameHeight: 720,
+      frameHRule: "exact",
+      frameWrap: "around",
+      frameHAnchor: "margin",
+      frameVAnchor: "page",
+      frameHSpace: 120,
+      frameVSpace: 240,
+      frameDropCap: "drop",
+      frameLines: 4,
+      frameLocked: true,
+      suppressOverlap: true,
+    }],
+    dop: {
+      pageBorderIncludes: { header: false, footer: false },
+      dogrid: { dxaGrid: 180, dyaGrid: 156, dxGridDisplay: 0, dyGridDisplay: 2 },
+      compatibility: { ulTrailSpace: true },
+    },
+  }, { title: "paragraph-frame" });
+  const xml = readDocxDocumentXml(docx);
+
+  assert.match(xml, /<w:pPr><w:framePr w:w="1440" w:h="720" w:hRule="exact" w:wrap="around" w:vAnchor="page" w:hAnchor="margin" w:hSpace="120" w:vSpace="240" w:dropCap="drop" w:lines="4" w:anchorLock="1"\/><w:suppressOverlap\/><\/w:pPr>/);
+});
+
+test("sprmPNest80 adds to parsed left indent without leaking parser internals", () => {
+  const props = parseSprms(Buffer.from([
+    0x10, 0x46, 0x32, 0x00, // sprmPNest80: +50
+    0x0f, 0x84, 0x64, 0x00, // sprmPDxaLeft80: 100
+  ]));
+  assert.equal(props.leftIndent, 150);
+  assert.equal(Object.keys(props).some((key) => key.startsWith("_")), false);
+
+  const logicalProps = parseSprms(Buffer.from([
+    0x0f, 0x84, 0x64, 0x00, // sprmPDxaLeft80: 100
+    0x10, 0x46, 0x32, 0x00, // sprmPNest80: +50
+    0x5f, 0x46, 0x14, 0x00, // sprmPNest: +20, supersedes PNest80
+    0x5e, 0x84, 0xe8, 0x03, // sprmPDxaLeft: 1000
+  ]));
+  assert.equal(logicalProps.leftIndent, 1020);
+});
+
+test("emits parsed MS-DOC character effect toggles to DOCX run properties", () => {
+  const docx = wpsToDocxBuffer({
+    bodyText: "A\r",
+    defaultTabStop: 720,
+    paragraphProperties: [{
+      suppressAutoHyphens: true,
+      paragraphShading: {
+        val: "solid",
+        color: "AABBCC",
+        fill: "123456",
+      },
+      mirrorIndents: true,
+    }],
+    dop: {
+      pageBorderIncludes: { header: false, footer: false },
+      dogrid: { dxaGrid: 180, dyaGrid: 156, dxGridDisplay: 0, dyGridDisplay: 2 },
+      compatibility: { ulTrailSpace: true },
+    },
+    characterProperties: [{
+      outline: true,
+      shadow: true,
+      imprint: true,
+      emboss: true,
+      noProof: true,
+      webHidden: true,
+      specVanish: true,
+      verticalAlign: "superscript",
+      textColor: "123456",
+      underline: true,
+      underlineStyle: "single",
+      underlineColor: "9ABCDE",
+      border: {
+        val: "single",
+        color: "123456",
+        sz: "6",
+        space: "0",
+      },
+    }],
+  }, { title: "character-effects" });
+  const xml = readDocxDocumentXml(docx);
+  const run = xml.match(/<w:r>[\s\S]*?<w:t>A<\/w:t><\/w:r>/)?.[0] ?? "";
+
+  assert.match(run, /<w:outline\/>/);
+  assert.match(run, /<w:shadow\/>/);
+  assert.match(run, /<w:imprint\/>/);
+  assert.match(run, /<w:emboss\/>/);
+  assert.match(run, /<w:noProof\/>/);
+  assert.match(run, /<w:webHidden\/>/);
+  assert.match(run, /<w:specVanish\/>/);
+  assert.match(run, /<w:vertAlign w:val="superscript"\/>/);
+  assert.match(run, /<w:color w:val="123456"\/>/);
+  assert.match(run, /<w:u w:val="single" w:color="9ABCDE"\/>/);
+  assert.match(run, /<w:bdr w:val="single" w:color="123456" w:sz="6" w:space="0"\/>/);
+  assert.match(xml, /<w:pPr><w:suppressAutoHyphens\/><w:shd w:val="solid" w:color="AABBCC" w:fill="123456"\/><w:mirrorIndents\/><\/w:pPr>/);
 });
 
 test("emits section breaks and tab stops in converted DOCX", async () => {

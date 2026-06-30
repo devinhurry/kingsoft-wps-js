@@ -77,6 +77,7 @@ const SPRM_CATEGORIES = {
   0x6412: "lineSpacing",
   0x840E: "rightIndent",
   0x840F: "leftIndent",
+  0x4610: "nest80",
   0x8411: "firstLineIndent",
   0x4455: "rightIndentChars",
   0x4456: "leftIndentChars",
@@ -86,6 +87,7 @@ const SPRM_CATEGORIES = {
   0x8458: "firstLineIndent",
   0x845D: "rightIndent",
   0x845E: "leftIndent",
+  0x465F: "nest",
   0x8460: "firstLineIndent",
   0x2400: "spacingBefore",
   0x2401: "spacingAfter",
@@ -318,8 +320,16 @@ function applySprm(props, sprm, val, size) {
       props.rightIndent = val.readInt16LE(0);
       break;
     case 0x840F:
+      setParagraphIndentPart(props, "leftIndent80", val.readInt16LE(0));
+      break;
     case 0x845E:
-      props.leftIndent = val.readInt16LE(0);
+      setParagraphIndentPart(props, "leftIndent", val.readInt16LE(0));
+      break;
+    case 0x4610:
+      setParagraphIndentPart(props, "nest80", val.readInt16LE(0));
+      break;
+    case 0x465F:
+      setParagraphIndentPart(props, "nest", val.readInt16LE(0));
       break;
     case 0x4455:
       props.rightIndentChars = val.readInt16LE(0);
@@ -355,6 +365,9 @@ function applySprm(props, sprm, val, size) {
     case 0x4845:
       // MS-DOC-SPEC/16 sprmCHpsPos: signed half-point vertical text position.
       props.textPosition = val.readInt16LE(0);
+      break;
+    case 0x2A48:
+      props.verticalAlign = verticalAlignFromIss(val[0]);
       break;
     case 0x4A61:
       props.fontSizeCs = val.readUInt16LE(0);
@@ -411,6 +424,12 @@ function applySprm(props, sprm, val, size) {
     case 0x0837:
       props.strike = val[0] !== 0;
       break;
+    case 0x0838:
+      props.outline = val[0] !== 0;
+      break;
+    case 0x0839:
+      props.shadow = val[0] !== 0;
+      break;
     case 0x2A53:
       props.dstrike = val[0] !== 0;
       break;
@@ -423,6 +442,21 @@ function applySprm(props, sprm, val, size) {
     case 0x083C:
       props.vanish = val[0] !== 0;
       break;
+    case 0x0811:
+      props.webHidden = val[0] !== 0;
+      break;
+    case 0x0818:
+      props.specVanish = val[0] !== 0;
+      break;
+    case 0x0854:
+      props.imprint = val[0] !== 0;
+      break;
+    case 0x0858:
+      props.emboss = val[0] !== 0;
+      break;
+    case 0x0875:
+      props.noProof = val[0] !== 0;
+      break;
     case 0x2A0E:
     case 0x2A3E:
       props.underlineStyle = underlineStyleFromCode(val[0]);
@@ -432,6 +466,12 @@ function applySprm(props, sprm, val, size) {
     case 0x4A60:
       props.textColor = ww8TextColorHex(val[0]);
       break;
+    case 0x6870:
+      props.textColor = colorRefToHex(val);
+      break;
+    case 0x6877:
+      props.underlineColor = colorRefToHex(val);
+      break;
     case 0x2A0C:
       props.highlight = ww8HighlightName(val[0]);
       break;
@@ -440,9 +480,23 @@ function applySprm(props, sprm, val, size) {
       // grid usage, mapped to OOXML run snapToGrid.
       props.charSnapToGrid = val[0] !== 0;
       break;
+    case 0x6865:
+      props.border = parseBrc80(val, { ignoreSpace: true });
+      break;
+    case 0xCA72:
+      props.border = parseBrcOperand(val, "character border", { ignoreSpace: true });
+      break;
     case 0x4866:
-    case 0xCA71:
       props.background = parseWw8Shade(val);
+      break;
+    case 0xCA71:
+      props.background = parseShdOperand(val, "character shading");
+      break;
+    case 0x442D:
+      props.paragraphShading = parseWw8Shade(val);
+      break;
+    case 0xC64D:
+      props.paragraphShading = parseShdOperand(val, "paragraph shading");
       break;
     case 0x286F:
       props.fontHint = val[0] === 1 ? "eastAsia" : "default";
@@ -506,6 +560,9 @@ function applySprm(props, sprm, val, size) {
     case 0x2407:
       props.pageBreakBefore = val[0] !== 0;
       break;
+    case 0x242A:
+      props.suppressAutoHyphens = val[0] !== 0;
+      break;
     case 0x2431:
       props.widowControl = val[0] !== 0;
       break;
@@ -536,6 +593,13 @@ function applySprm(props, sprm, val, size) {
     case 0x246D:
       // sprmPFContextualSpacing (MS-DOC-SPEC/16): Bool8 — ignore space between same-style paragraphs
       props.contextualSpacing = val[0] !== 0;
+      break;
+    case 0x2470:
+      props.mirrorIndents = val[0] !== 0;
+      break;
+    case 0x2462:
+      // sprmPFNoAllowOverlap: prevent this paragraph frame from overlapping other frames.
+      props.suppressOverlap = val[0] !== 0;
       break;
     case 0x260A:
       props.listLevel = val[0];
@@ -582,6 +646,16 @@ function applySprm(props, sprm, val, size) {
       props.frameHRule = (raw & 0x8000) ? "atLeast" : "exact";
       break;
     }
+    case 0x442C: { // sprmPDcs: drop cap properties for the paragraph frame
+      Object.assign(props, parseDcs(val));
+      break;
+    }
+    case 0x842E: // sprmPDyaFromText: minimum vertical frame-to-text distance in twips
+      props.frameVSpace = val.readUInt16LE(0);
+      break;
+    case 0x842F: // sprmPDxaFromText: minimum horizontal frame-to-text distance in twips
+      props.frameHSpace = val.readUInt16LE(0);
+      break;
     case 0x261B: { // sprmPPc: frame anchor (PositionCodeOperand)
       const pc = val[0];
       const pcVert = (pc >> 4) & 3;
@@ -638,6 +712,30 @@ function applySprm(props, sprm, val, size) {
       props.paragraphBorders ??= {};
       props.paragraphBorders.bar = parseBrc80(val);
       break;
+    case 0xC64E: // sprmPBrcTop
+      props.paragraphBorders ??= {};
+      props.paragraphBorders.top = parseBrcOperand(val, "paragraph top border");
+      break;
+    case 0xC64F: // sprmPBrcLeft
+      props.paragraphBorders ??= {};
+      props.paragraphBorders.left = parseBrcOperand(val, "paragraph left border");
+      break;
+    case 0xC650: // sprmPBrcBottom
+      props.paragraphBorders ??= {};
+      props.paragraphBorders.bottom = parseBrcOperand(val, "paragraph bottom border");
+      break;
+    case 0xC651: // sprmPBrcRight
+      props.paragraphBorders ??= {};
+      props.paragraphBorders.right = parseBrcOperand(val, "paragraph right border");
+      break;
+    case 0xC652: // sprmPBrcBetween
+      props.paragraphBorders ??= {};
+      props.paragraphBorders.between = parseBrcOperand(val, "paragraph between border");
+      break;
+    case 0xC653: // sprmPBrcBar
+      props.paragraphBorders ??= {};
+      props.paragraphBorders.bar = parseBrcOperand(val, "paragraph bar border");
+      break;
     default:
       break;
   }
@@ -661,18 +759,74 @@ const FRAME_V_ANCHOR = ["margin", "page", "text", "margin"];
 // Frame horizontal anchor per MS-DOC-SPEC sprmPPc pcHorz
 const FRAME_H_ANCHOR = ["text", "margin", "page", "margin"];
 
-function parseBrc80(val) {
+function parseBrc80(val, { ignoreSpace = false } = {}) {
   if (val.length < 4) return null;
   const dptLineWidth = val[0];
   const brcType = val[1];
   const ico = val[2];
-  const dptSpace = val[3] & 0x1F;
+  const dptSpace = ignoreSpace ? 0 : (val[3] & 0x1F);
   if (brcType === 0) return null; // no border
   return {
     val: brcTypeToBorderName(brcType, "paragraph border"),
     color: brcColorFromIco(ico),
     sz: String(dptLineWidth),
     space: String(dptSpace),
+  };
+}
+
+function parseDcs(val) {
+  const raw = val.readUInt16LE(0);
+  const fdct = raw & 0x0007;
+  const cl = (raw >> 3) & 0x001f;
+  if (fdct !== 1 && fdct !== 2) {
+    throw new Error(`Out-of-spec MS-DOC DCS fdct ${fdct}`);
+  }
+  if (cl < 1 || cl > 10) {
+    throw new Error(`Out-of-spec MS-DOC DCS lines ${cl}`);
+  }
+  // MS-DOC-SPEC/19 DCS.fdct maps to ECMA-376 framePr@dropCap.
+  return {
+    frameDropCap: fdct === 1 ? "drop" : "margin",
+    frameLines: cl,
+  };
+}
+
+function setParagraphIndentPart(props, key, value) {
+  Object.defineProperty(props, `_${key}`, {
+    value,
+    writable: true,
+    configurable: true,
+    enumerable: false,
+  });
+  updateParagraphLeftIndent(props);
+}
+
+function updateParagraphLeftIndent(props) {
+  const hasLogicalNest = props._nest != null;
+  const hasLogicalLeft = props._leftIndent != null;
+  if (hasLogicalNest || hasLogicalLeft) {
+    // MS-DOC-SPEC/16 sprmPNest adds to sprmPDxaLeft and supersedes sprmPNest80.
+    props.leftIndent = (props._leftIndent ?? 0) + (props._nest ?? 0);
+    return;
+  }
+  if (props._leftIndent80 != null || props._nest80 != null) {
+    // MS-DOC-SPEC/16 sprmPNest80 adds to sprmPDxaLeft80.
+    props.leftIndent = (props._leftIndent80 ?? 0) + (props._nest80 ?? 0);
+  }
+}
+
+function parseBrcOperand(val, context, { ignoreSpace = false } = {}) {
+  if (!val || val.length < 9 || val[0] !== 8) {
+    throw new Error(`Out-of-spec ${context} BrcOperand length ${val?.length ?? 0}`);
+  }
+  const brc = val.subarray(1, 9);
+  const brcType = brc[5];
+  if (brcType === 0) return null;
+  return {
+    val: brcTypeToBorderName(brcType, context),
+    color: colorRefToHex(brc.subarray(0, 4)),
+    sz: String(brc[4]),
+    space: String(ignoreSpace ? 0 : (brc[6] & 0x1f)),
   };
 }
 
@@ -735,6 +889,20 @@ function ww8TextColorHex(index) {
   throw new Error(`Out-of-spec MS-DOC Ico text color index ${index}`);
 }
 
+export function colorRefToHex(colorRef) {
+  if (!colorRef || colorRef.length < 4) {
+    return null;
+  }
+  // MS-DOC-SPEC/19 COLORREF stores red, green, blue, fAuto bytes. fAuto MUST
+  // be 0x00 or 0xFF; 0xFF is cvAuto, the application default color.
+  const fAuto = colorRef[3];
+  if (fAuto === 0xff) return "auto";
+  if (fAuto !== 0x00) {
+    throw new Error(`Out-of-spec MS-DOC COLORREF fAuto ${fAuto}`);
+  }
+  return `${colorRef[0].toString(16).padStart(2, "0")}${colorRef[1].toString(16).padStart(2, "0")}${colorRef[2].toString(16).padStart(2, "0")}`.toUpperCase();
+}
+
 function ww8ShadeColorHex(index, autoHex) {
   if (index == null) return null;
   if (index === 0) return autoHex;
@@ -792,6 +960,72 @@ function parseWw8Shade(val) {
     val: styleIndex === 38 ? "pct15" : "clear",
     color: "auto",
     fill,
+  };
+}
+
+const IPAT_TO_ST_SHD = {
+  0x0000: "clear",
+  0x0001: "solid",
+  0x0002: "pct5",
+  0x0003: "pct10",
+  0x0004: "pct20",
+  0x0005: "pct25",
+  0x0006: "pct30",
+  0x0007: "pct40",
+  0x0008: "pct50",
+  0x0009: "pct60",
+  0x000a: "pct70",
+  0x000b: "pct75",
+  0x000c: "pct80",
+  0x000d: "pct90",
+  0x000e: "horzStripe",
+  0x000f: "vertStripe",
+  0x0010: "reverseDiagStripe",
+  0x0011: "diagStripe",
+  0x0012: "horzCross",
+  0x0013: "diagCross",
+  0x0014: "thinHorzStripe",
+  0x0015: "thinVertStripe",
+  0x0016: "thinReverseDiagStripe",
+  0x0017: "thinDiagStripe",
+  0x0018: "thinHorzCross",
+  0x0019: "thinDiagCross",
+  0x0025: "pct12",
+  0x0026: "pct15",
+  0x002b: "pct35",
+  0x002c: "pct37",
+  0x002e: "pct45",
+  0x0031: "pct55",
+  0x0033: "pct62",
+  0x0034: "pct65",
+  0x0039: "pct85",
+  0x003a: "pct87",
+  0x003c: "pct95",
+  0xffff: "nil",
+};
+
+const UNMAPPED_IPAT_VALUES = new Set([
+  0x0023, 0x0024, 0x0027, 0x0028, 0x0029, 0x002a, 0x002d, 0x002f,
+  0x0030, 0x0032, 0x0035, 0x0036, 0x0037, 0x0038, 0x003b, 0x003d,
+]);
+
+function parseShdOperand(val, context) {
+  if (!val || val.length < 11 || val[0] !== 10) {
+    throw new Error(`Out-of-spec ${context} SHDOperand length ${val?.length ?? 0}`);
+  }
+  const ipat = val.readUInt16LE(9);
+  if (ipat === 0xffff) return null;
+  const shdVal = IPAT_TO_ST_SHD[ipat];
+  if (!shdVal) {
+    if (UNMAPPED_IPAT_VALUES.has(ipat)) {
+      throw new Error(`Unimplemented ${context} Ipat 0x${ipat.toString(16)} has no ECMA-376 ST_Shd mapping`);
+    }
+    throw new Error(`Out-of-spec ${context} Ipat 0x${ipat.toString(16)}`);
+  }
+  return {
+    val: shdVal,
+    color: colorRefToHex(val.subarray(1, 5)),
+    fill: colorRefToHex(val.subarray(5, 9)),
   };
 }
 
@@ -859,6 +1093,19 @@ function underlineStyleFromCode(code) {
       return "wavyDouble";
     default:
       throw new Error(`Out-of-spec MS-DOC Kul underline value ${code}`);
+  }
+}
+
+function verticalAlignFromIss(code) {
+  switch (code) {
+    case 0:
+      return null;
+    case 1:
+      return "superscript";
+    case 2:
+      return "subscript";
+    default:
+      throw new Error(`Out-of-spec MS-DOC Iss superscript/subscript value ${code}`);
   }
 }
 

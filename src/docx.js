@@ -194,12 +194,34 @@ function buildSettingsXml(wpsDocument = {}) {
   parts.push(
     `<w:documentProtection${readOnlyEastAsianProfile ? ` w:edit="readOnly"` : ""} w:enforcement="0"/>`,
     `<w:defaultTabStop w:val="${defaultTabStop}"/>`,
-    `<w:hyphenationZone w:val="360"/>`,
+    `<w:hyphenationZone w:val="${(dop?.dxaHotZ && dop.dxaHotZ > 0) ? dop.dxaHotZ : 360}"/>`,
   );
 
-  // MS-DOC-SPEC/19 §SClmOperand: evenAndOddHeaders is absent only for
-  // clmLinesOnly (docGridType=2). Types 0, 1, undefined all emit it.
-  if (sectionDocGridType !== 2 && !hasNegativeGridCharSpace) {
+  // MS-DOC-SPEC/17 DopBase.fAutoHyphen maps to OOXML autoHyphenation.
+  if (dop?.fAutoHyphen) {
+    parts.push(`<w:autoHyphenation w:val="1"/>`);
+  }
+
+  // MS-DOC-SPEC/17 DopBase.cConsecHypLim maps to OOXML consecutiveHyphenLimit.
+  if (dop?.cConsecHypLim && dop.cConsecHypLim > 0) {
+    parts.push(`<w:consecutiveHyphenLimit w:val="${dop.cConsecHypLim}"/>`);
+  }
+
+  // MS-DOC-SPEC/17 DopBase.fHyphCapitals is the opposite of OOXML doNotHyphenateCaps.
+  // When fHyphCapitals is false, words in all caps are NOT hyphenated.
+  if (dop?.fHyphCapitals === false) {
+    parts.push(`<w:doNotHyphenateCaps w:val="1"/>`);
+  }
+
+  // MS-DOC-SPEC/17 DopBase.fLinkStyles maps to OOXML linkStyles.
+  if (dop?.fLinkStyles) {
+    parts.push(`<w:linkStyles w:val="1"/>`);
+  }
+
+  // MS-DOC-SPEC/17 DopBase.fFacingPages maps to OOXML evenAndOddHeaders.
+  // WPS also uses this as a condition for evenAndOddHeaders emission,
+  // falling back to the docGridType heuristic when fFacingPages is absent.
+  if (dop?.fFacingPages ?? (sectionDocGridType !== 2 && !hasNegativeGridCharSpace)) {
     parts.push(`<w:evenAndOddHeaders w:val="1"/>`);
   }
 
@@ -471,11 +493,15 @@ function createNumberingXml(wpsDocument = {}) {
 	      const hasFontSizeRPr = lvl.fontSize != null;
       const hasBoldRPr = lvl.bold != null;
       const hasItalicRPr = lvl.italic != null;
-      const hasToggleRPr = lvl.boldCs != null || lvl.italicCs != null || lvl.caps != null || lvl.smallCaps != null || lvl.strike != null || lvl.dstrike != null || lvl.vanish != null;
-      const hasPositionRPr = lvl.textPosition != null;
-      const hasKernRPr = lvl.kern != null;
-      const hasUnderlineRPr = lvl.underline != null;
-	      if (hasFontRPr || hasSizeRPr || hasColorRPr || hasSpacingRPr || hasCharWidthRPr || hasFontSizeRPr || hasBoldRPr || hasItalicRPr || hasToggleRPr || hasPositionRPr || hasKernRPr || hasUnderlineRPr) {
+      const hasToggleRPr = lvl.boldCs != null || lvl.italicCs != null || lvl.caps != null || lvl.smallCaps != null || lvl.strike != null || lvl.dstrike != null || lvl.vanish != null
+        || lvl.outline != null || lvl.shadow != null || lvl.imprint != null || lvl.emboss != null || lvl.noProof != null || lvl.webHidden != null || lvl.specVanish != null;
+		      const hasPositionRPr = lvl.textPosition != null;
+      const hasVerticalAlignRPr = lvl.verticalAlign != null;
+		      const hasKernRPr = lvl.kern != null;
+	      const hasUnderlineRPr = lvl.underline != null;
+      const hasBorderRPr = lvl.border != null;
+      const underlineColorAttr = lvl.underlineColor != null && lvl.underlineColor !== "auto" ? ` w:color="${lvl.underlineColor}"` : "";
+		      if (hasFontRPr || hasSizeRPr || hasColorRPr || hasSpacingRPr || hasCharWidthRPr || hasFontSizeRPr || hasBoldRPr || hasItalicRPr || hasToggleRPr || hasPositionRPr || hasVerticalAlignRPr || hasKernRPr || hasUnderlineRPr || hasBorderRPr) {
 	        parts.push('<w:rPr>');
 	        if (hasFontRPr) parts.push(`<w:rFonts ${fontAttrs.join(" ")}/>`);
         if (lvl.bold === true) parts.push(`<w:b/>`);
@@ -491,10 +517,19 @@ function createNumberingXml(wpsDocument = {}) {
         appendToggleRunProperty(parts, "strike", lvl.strike);
         appendToggleRunProperty(parts, "dstrike", lvl.dstrike);
         appendToggleRunProperty(parts, "vanish", lvl.vanish);
+        appendToggleRunProperty(parts, "outline", lvl.outline);
+        appendToggleRunProperty(parts, "shadow", lvl.shadow);
+        appendToggleRunProperty(parts, "imprint", lvl.imprint);
+        appendToggleRunProperty(parts, "emboss", lvl.emboss);
+        appendToggleRunProperty(parts, "noProof", lvl.noProof);
+        appendToggleRunProperty(parts, "webHidden", lvl.webHidden);
+        appendToggleRunProperty(parts, "specVanish", lvl.specVanish);
 	        if (hasSpacingRPr) parts.push(`<w:spacing w:val="${lvl.charSpacing}"/>`);
-        if (hasKernRPr) parts.push(`<w:kern w:val="${lvl.kern}"/>`);
-        if (hasPositionRPr) parts.push(`<w:position w:val="${lvl.textPosition}"/>`);
-        if (hasUnderlineRPr) parts.push(`<w:u w:val="${lvl.underline ? (lvl.underlineStyle ?? "single") : "none"}"/>`);
+	        if (hasKernRPr) parts.push(`<w:kern w:val="${lvl.kern}"/>`);
+	        if (hasPositionRPr) parts.push(`<w:position w:val="${lvl.textPosition}"/>`);
+        if (hasVerticalAlignRPr) parts.push(`<w:vertAlign w:val="${lvl.verticalAlign}"/>`);
+        if (hasUnderlineRPr) parts.push(`<w:u w:val="${lvl.underline ? (lvl.underlineStyle ?? "single") : "none"}"${underlineColorAttr}/>`);
+        if (hasBorderRPr) parts.push(`<w:bdr w:val="${lvl.border.val}" w:color="${lvl.border.color}" w:sz="${lvl.border.sz}" w:space="${lvl.border.space}"/>`);
 	        if (hasCharWidthRPr) parts.push(`<w:w w:val="${lvl.charWidth}"/>`);
 	        if (hasFontSizeRPr) parts.push(`<w:sz w:val="${lvl.fontSize}"/>`);
 	        if (hasSizeRPr) parts.push(`<w:szCs w:val="${lvl.fontSizeCs}"/>`);
@@ -1575,7 +1610,9 @@ function cleanParagraphText(text) {
   // rendering as <w:br w:type="column"/> in buildRuns.
   // MS-DOC-SPEC/16: 0x0B is the manual line-break character — preserve it
   // for rendering as <w:br w:type="textWrapping"/> in buildRuns.
-  return text.replace(/[\x00-\x06\x08\x0d\x0f-\x1f]/g, "");
+  // MS-DOC-SPEC/19: 0x13 (field begin), 0x14 (field separator), 0x15 (field
+  // end) are field characters — preserve them for fldChar/instrText emission.
+  return text.replace(/[\x00-\x06\x08\x0d\x0f-\x12\x16-\x1f]/g, "");
 }
 
 function paragraphToXml(paragraph, properties, characterProperties, fontTable, charIdx, sectionProperties = null, spacingSectionProperties = sectionProperties, sectionIndex = -1, paraId = null, documentOptions = {}) {
@@ -1676,6 +1713,10 @@ function buildRuns(paragraph, characterProperties, fontTable, charIdx, paragraph
   const parts = splitTabsAndMarks(paragraph);
   let currentCharIdx = charIdx;
   const runs = [];
+  // MS-DOC-SPEC/19 §Plcfld: field state machine — track whether we are
+  // inside a field instruction (between 0x13 and 0x14) vs result (between
+  // 0x14 and 0x15) so text runs get the right XML wrapper.
+  let inFieldInstruction = false;
 
   for (const part of parts) {
     if (part === "\t") {
@@ -1693,7 +1734,6 @@ function buildRuns(paragraph, characterProperties, fontTable, charIdx, paragraph
       continue;
     }
     // MS-DOC-SPEC/16: 0x0E is the column-break character
-    // (end-of-column character). Render as <w:br w:type="column"/>.
     if (part === "\x0e") {
       runs.push(bookmarkTagsAtCp(bookmarkEvents, currentCharIdx));
       const rPr = buildRunPropertiesXml(characterProperties, fontTable, currentCharIdx, runOverrides, runDefaults);
@@ -1703,7 +1743,6 @@ function buildRuns(paragraph, characterProperties, fontTable, charIdx, paragraph
       continue;
     }
     // MS-DOC-SPEC/16: 0x0B is the manual line-break character.
-    // Render as <w:br w:type="textWrapping"/>.
     if (part === "\x0b") {
       runs.push(bookmarkTagsAtCp(bookmarkEvents, currentCharIdx));
       const rPr = buildRunPropertiesXml(characterProperties, fontTable, currentCharIdx, runOverrides, runDefaults);
@@ -1712,8 +1751,41 @@ function buildRuns(paragraph, characterProperties, fontTable, charIdx, paragraph
       runs.push(bookmarkTagsAtCp(bookmarkEvents, currentCharIdx));
       continue;
     }
+    // MS-DOC-SPEC/19: 0x13 is the field-begin character.
+    if (part === "\x13") {
+      runs.push(bookmarkTagsAtCp(bookmarkEvents, currentCharIdx));
+      const rPr = buildRunPropertiesXml(characterProperties, fontTable, currentCharIdx, runOverrides, runDefaults);
+      runs.push(`<w:r>${rPr}<w:fldChar w:fldCharType="begin"/></w:r>`);
+      currentCharIdx += 1;
+      runs.push(bookmarkTagsAtCp(bookmarkEvents, currentCharIdx));
+      inFieldInstruction = true;
+      continue;
+    }
+    // MS-DOC-SPEC/19: 0x14 is the field-separator character.
+    if (part === "\x14") {
+      runs.push(bookmarkTagsAtCp(bookmarkEvents, currentCharIdx));
+      const rPr = buildRunPropertiesXml(characterProperties, fontTable, currentCharIdx, runOverrides, runDefaults);
+      runs.push(`<w:r>${rPr}<w:fldChar w:fldCharType="separate"/></w:r>`);
+      currentCharIdx += 1;
+      runs.push(bookmarkTagsAtCp(bookmarkEvents, currentCharIdx));
+      inFieldInstruction = false;
+      continue;
+    }
+    // MS-DOC-SPEC/19: 0x15 is the field-end character.
+    if (part === "\x15") {
+      runs.push(bookmarkTagsAtCp(bookmarkEvents, currentCharIdx));
+      const rPr = buildRunPropertiesXml(characterProperties, fontTable, currentCharIdx, runOverrides, runDefaults);
+      runs.push(`<w:r>${rPr}<w:fldChar w:fldCharType="end"/></w:r>`);
+      currentCharIdx += 1;
+      runs.push(bookmarkTagsAtCp(bookmarkEvents, currentCharIdx));
+      inFieldInstruction = false;
+      continue;
+    }
 
-    runs.push(...buildTextRuns(part, characterProperties, fontTable, currentCharIdx, paragraphProperties, runOverrides, runDefaults, bookmarkEvents));
+    // MS-DOC-SPEC/19: text between 0x13 and 0x14 is a field instruction
+    // and MUST be wrapped in <w:instrText> instead of <w:t>.
+    const textTag = inFieldInstruction ? "instrText" : "t";
+    runs.push(...buildTextRuns(part, characterProperties, fontTable, currentCharIdx, paragraphProperties, runOverrides, runDefaults, bookmarkEvents, textTag));
     currentCharIdx += part.length;
   }
   runs.push(bookmarkTagsAtCp(bookmarkEvents, currentCharIdx));
@@ -1736,7 +1808,9 @@ function splitTabsAndMarks(value) {
   const parts = [];
   let start = 0;
   for (let i = 0; i < value.length; i += 1) {
-    if (value[i] === "\t" || value[i] === "\x07" || value[i] === "\x0b" || value[i] === "\x0c" || value[i] === "\x0e") {
+    // MS-DOC-SPEC/19: split on tabs, cell/para/section marks, line/col breaks,
+    // and field chars (0x13 begin, 0x14 separator, 0x15 end)
+    if (value[i] === "\t" || value[i] === "\x07" || value[i] === "\x0b" || value[i] === "\x0c" || value[i] === "\x0e" || value[i] === "\x13" || value[i] === "\x14" || value[i] === "\x15") {
       if (i > start) {
         parts.push(value.slice(start, i));
       }
@@ -1750,7 +1824,7 @@ function splitTabsAndMarks(value) {
   return parts;
 }
 
-function buildTextRuns(text, characterProperties, fontTable, charIdx, paragraphProperties = null, runOverrides = null, runDefaults = null, bookmarkEvents = null) {
+function buildTextRuns(text, characterProperties, fontTable, charIdx, paragraphProperties = null, runOverrides = null, runDefaults = null, bookmarkEvents = null, textTag = "t") {
   const runs = [];
   let start = 0;
   runs.push(bookmarkTagsAtCp(bookmarkEvents, charIdx));
@@ -1785,7 +1859,7 @@ function buildTextRuns(text, characterProperties, fontTable, charIdx, paragraphP
       runs.push(buildSymbolRun(currentProps, fontTable, rPr, part.length));
     } else {
       const spaceAttr = needsPreservedSpace(part) ? ' xml:space="preserve"' : "";
-      runs.push(`<w:r>${rPr}<w:t${spaceAttr}>${escapeXml(part)}</w:t></w:r>`);
+      runs.push(`<w:r>${rPr}<w:${textTag}${spaceAttr}>${escapeXml(part)}</w:${textTag}></w:r>`);
     }
     start = end;
     runs.push(bookmarkTagsAtCp(bookmarkEvents, charIdx + start));
@@ -1825,6 +1899,7 @@ function runPropertiesKey(props, fontTable) {
     props.italic === true ? 1 : props.italic === false ? 0 : "",
     props.underline ? 1 : 0,
     props.underlineStyle ?? "",
+    props.underlineColor ?? "",
     props.symbolFontId ?? "",
     props.symbolChar ?? "",
     props.fontSize ?? "",
@@ -1832,13 +1907,25 @@ function runPropertiesKey(props, fontTable) {
     props.charSpacing ?? "",
     props.charWidth ?? "",
     props.textPosition ?? "",
+    props.verticalAlign ?? "",
     props.fontHint ?? "",
     props.charSnapToGrid === true ? 1 : props.charSnapToGrid === false ? 0 : "",
+    props.outline === true ? 1 : props.outline === false ? 0 : "",
+    props.shadow === true ? 1 : props.shadow === false ? 0 : "",
+    props.imprint === true ? 1 : props.imprint === false ? 0 : "",
+    props.emboss === true ? 1 : props.emboss === false ? 0 : "",
+    props.noProof === true ? 1 : props.noProof === false ? 0 : "",
+    props.webHidden === true ? 1 : props.webHidden === false ? 0 : "",
+    props.specVanish === true ? 1 : props.specVanish === false ? 0 : "",
     props.textColor ?? "",
     props.highlight ?? "",
     props.background?.val ?? "",
     props.background?.color ?? "",
     props.background?.fill ?? "",
+    props.border?.val ?? "",
+    props.border?.color ?? "",
+    props.border?.sz ?? "",
+    props.border?.space ?? "",
     props.styleId ?? "",
     props.langId ?? "",
     props.langIdEastAsia ?? "",
@@ -1879,6 +1966,14 @@ function buildRunPropertiesXmlFromProps(props, fontTable, { includeDefaults, emi
   if (props.charSnapToGrid != null) {
     parts.push(props.charSnapToGrid ? `<w:snapToGrid/>` : `<w:snapToGrid w:val="0"/>`);
   }
+
+  appendToggleRunProperty(parts, "outline", props.outline);
+  appendToggleRunProperty(parts, "shadow", props.shadow);
+  appendToggleRunProperty(parts, "imprint", props.imprint);
+  appendToggleRunProperty(parts, "emboss", props.emboss);
+  appendToggleRunProperty(parts, "noProof", props.noProof);
+  appendToggleRunProperty(parts, "webHidden", props.webHidden);
+  appendToggleRunProperty(parts, "specVanish", props.specVanish);
 
 	  if (props.bold === true) {
 	    parts.push(`<w:b/>`);
@@ -1951,6 +2046,9 @@ function buildRunPropertiesXmlFromProps(props, fontTable, { includeDefaults, emi
     // MS-DOC-SPEC/16 sprmCHpsPos defaults to 0, the baseline position.
     parts.push(`<w:vertAlign w:val="baseline"/>`);
   }
+  if (props.verticalAlign != null) {
+    parts.push(`<w:vertAlign w:val="${props.verticalAlign}"/>`);
+  }
 
   if (props.background != null) {
     parts.push(`<w:shd w:val="${props.background.val}" w:color="${props.background.color}" w:fill="${props.background.fill}"/>`);
@@ -1962,12 +2060,17 @@ function buildRunPropertiesXmlFromProps(props, fontTable, { includeDefaults, emi
     parts.push(`<w:highlight w:val="none"/>`);
   }
 
+  const underlineColorAttr = props.underlineColor != null && props.underlineColor !== "auto" ? ` w:color="${props.underlineColor}"` : "";
   if (props.underlineStyle) {
-    parts.push(`<w:u w:val="${props.underlineStyle}"/>`);
+    parts.push(`<w:u w:val="${props.underlineStyle}"${underlineColorAttr}/>`);
   } else if (props.underline) {
-    parts.push(`<w:u w:val="single"/>`);
+    parts.push(`<w:u w:val="single"${underlineColorAttr}/>`);
   } else if (props.underline === false) {
     parts.push(`<w:u w:val="none"/>`);
+  }
+
+  if (props.border != null) {
+    parts.push(`<w:bdr w:val="${props.border.val}" w:color="${props.border.color}" w:sz="${props.border.sz}" w:space="${props.border.space}"/>`);
   }
 
   if (props.langId != null || props.langIdEastAsia != null || props.langIdBidi != null) {
@@ -2035,12 +2138,27 @@ function buildParagraphPropertiesXml(properties, paragraphMarkProperties = null,
   }
 
   const numbering = buildParagraphNumberingXml(properties, paragraphText, documentOptions);
-  appendParagraphControlXml(parts, properties, {
-    includeDefaults: false,
-    lineNumberCount: properties?.lineNumberCount,
-    numberingXml: numbering.xml,
-    phase: "beforeTabs",
-  });
+  const hasFrameProperties = hasParagraphFrameProperties(properties);
+  if (hasFrameProperties) {
+    appendParagraphControlXml(parts, properties, {
+      includeDefaults: false,
+      phase: "beforeFrame",
+    });
+    appendParagraphFramePropertiesXml(parts, properties);
+    appendParagraphControlXml(parts, properties, {
+      includeDefaults: false,
+      lineNumberCount: properties?.lineNumberCount,
+      numberingXml: numbering.xml,
+      phase: "afterFrame",
+    });
+  } else {
+    appendParagraphControlXml(parts, properties, {
+      includeDefaults: false,
+      lineNumberCount: properties?.lineNumberCount,
+      numberingXml: numbering.xml,
+      phase: "beforeTabs",
+    });
+  }
   appendParagraphTabsXml(parts, properties, paragraphText, numbering.hasListTabs);
   if (!documentOptions.suppressEastAsianParagraphControls) {
     appendParagraphControlXml(parts, properties, {
@@ -2050,8 +2168,14 @@ function buildParagraphPropertiesXml(properties, paragraphMarkProperties = null,
   }
   appendParagraphSpacingXml(parts, properties, spacingSectionProperties);
   appendParagraphIndentXml(parts, properties, paragraphText, paragraphMarkProperties, documentOptions);
+  if (properties?.paragraphShading) {
+    parts.push(`<w:shd w:val="${properties.paragraphShading.val}" w:color="${properties.paragraphShading.color}" w:fill="${properties.paragraphShading.fill}"/>`);
+  }
   if (properties?.contextualSpacing) {
     parts.push(`<w:contextualSpacing/>`);
+  }
+  if (properties?.mirrorIndents) {
+    parts.push(`<w:mirrorIndents/>`);
   }
   if (properties?.alignment) {
     parts.push(`<w:jc w:val="${properties.alignment}"/>`);
@@ -2102,6 +2226,46 @@ function appendParagraphTabsXml(parts, properties, paragraphText, hasListTabs = 
   parts.push(`<w:tabs>${tabsXml}</w:tabs>`);
 }
 
+function hasParagraphFrameProperties(properties) {
+  return properties?.frameWidth != null
+    || properties?.frameHeight != null
+    || properties?.frameHRule != null
+    || properties?.frameWrap != null
+    || properties?.frameVAnchor != null
+    || properties?.frameHAnchor != null
+    || properties?.frameXAlign != null
+    || properties?.frameYAlign != null
+    || properties?.frameX != null
+    || properties?.frameY != null
+    || properties?.frameLocked
+    || properties?.frameHSpace != null
+    || properties?.frameVSpace != null
+    || properties?.frameDropCap != null
+    || properties?.frameLines != null
+    || properties?.suppressOverlap != null;
+}
+
+function appendParagraphFramePropertiesXml(parts, properties) {
+  if (!hasParagraphFrameProperties(properties)) return;
+  const attrs = [];
+  if (properties.frameWidth != null) attrs.push(`w:w="${properties.frameWidth}"`);
+  if (properties.frameHeight != null) attrs.push(`w:h="${properties.frameHeight}"`);
+  if (properties.frameHRule != null) attrs.push(`w:hRule="${escapeXml(properties.frameHRule)}"`);
+  if (properties.frameWrap != null) attrs.push(`w:wrap="${escapeXml(properties.frameWrap)}"`);
+  if (properties.frameVAnchor != null) attrs.push(`w:vAnchor="${escapeXml(properties.frameVAnchor)}"`);
+  if (properties.frameHAnchor != null) attrs.push(`w:hAnchor="${escapeXml(properties.frameHAnchor)}"`);
+  if (properties.frameXAlign != null) attrs.push(`w:xAlign="${escapeXml(properties.frameXAlign)}"`);
+  if (properties.frameYAlign != null) attrs.push(`w:yAlign="${escapeXml(properties.frameYAlign)}"`);
+  if (properties.frameX != null) attrs.push(`w:x="${properties.frameX}"`);
+  if (properties.frameY != null) attrs.push(`w:y="${properties.frameY}"`);
+  if (properties.frameHSpace != null) attrs.push(`w:hSpace="${properties.frameHSpace}"`);
+  if (properties.frameVSpace != null) attrs.push(`w:vSpace="${properties.frameVSpace}"`);
+  if (properties.frameDropCap != null) attrs.push(`w:dropCap="${escapeXml(properties.frameDropCap)}"`);
+  if (properties.frameLines != null) attrs.push(`w:lines="${properties.frameLines}"`);
+  if (properties.frameLocked) attrs.push(`w:anchorLock="1"`);
+  if (attrs.length) parts.push(`<w:framePr ${attrs.join(" ")}/>`);
+}
+
 function appendParagraphControlXml(parts, properties, { includeDefaults, lineNumberCount = null, numberingXml = "", phase = "all" }) {
   const emit = (name, value, { defaultValue = null } = {}) => {
     const actual = value ?? (includeDefaults ? defaultValue : null);
@@ -2124,8 +2288,10 @@ function appendParagraphControlXml(parts, properties, { includeDefaults, lineNum
     } else if (lineNumberCount === false) {
       parts.push(`<w:suppressLineNumbers/>`);
     }
+    emit("suppressOverlap", properties?.suppressOverlap);
   }
   if (phase === "all" || phase === "afterTabs") {
+    emit("suppressAutoHyphens", properties?.suppressAutoHyphens);
     emit("kinsoku", properties?.kinsoku, { defaultValue: true });
     emit("wordWrap", properties?.wordWrap, { defaultValue: true });
     emit("overflowPunct", properties?.overflowPunct, { defaultValue: true });
@@ -2692,10 +2858,7 @@ function buildStyleParagraphPropertiesXml(style, docGridLinePitch = null) {
   const paragraphStyle = style;
 
   const numbering = buildParagraphNumberingXml(paragraphStyle, "");
-  const hasFrameProperties = paragraphStyle.frameWidth != null
-    || paragraphStyle.frameHeight != null
-    || paragraphStyle.frameXAlign != null
-    || paragraphStyle.frameY != null;
+  const hasFrameProperties = hasParagraphFrameProperties(paragraphStyle);
   if (hasFrameProperties) {
     appendParagraphControlXml(parts, paragraphStyle, {
       includeDefaults: false,
@@ -2727,19 +2890,7 @@ function buildStyleParagraphPropertiesXml(style, docGridLinePitch = null) {
     phase: "afterTabs",
   });
   if (hasFrameProperties) {
-    const fparts = [];
-    if (paragraphStyle.frameWidth != null) fparts.push(`w:w="${paragraphStyle.frameWidth}"`);
-    if (paragraphStyle.frameHeight != null) fparts.push(`w:h="${paragraphStyle.frameHeight}"`);
-    if (paragraphStyle.frameHRule != null) fparts.push(`w:hRule="${paragraphStyle.frameHRule}"`);
-    if (paragraphStyle.frameWrap != null) fparts.push(`w:wrap="${paragraphStyle.frameWrap}"`);
-    if (paragraphStyle.frameVAnchor != null) fparts.push(`w:vAnchor="${paragraphStyle.frameVAnchor}"`);
-    if (paragraphStyle.frameHAnchor != null) fparts.push(`w:hAnchor="${paragraphStyle.frameHAnchor}"`);
-    if (paragraphStyle.frameXAlign != null) fparts.push(`w:xAlign="${paragraphStyle.frameXAlign}"`);
-    if (paragraphStyle.frameYAlign != null) fparts.push(`w:yAlign="${paragraphStyle.frameYAlign}"`);
-    if (paragraphStyle.frameX != null) fparts.push(`w:x="${paragraphStyle.frameX}"`);
-    if (paragraphStyle.frameY != null) fparts.push(`w:y="${paragraphStyle.frameY}"`);
-    if (paragraphStyle.frameLocked) fparts.push(`w:anchorLock="1"`);
-    if (fparts.length) parts.push(`<w:framePr ${fparts.join(" ")}/>`);
+    appendParagraphFramePropertiesXml(parts, paragraphStyle);
     appendParagraphControlXml(parts, paragraphStyle, {
       includeDefaults: false,
       lineNumberCount: paragraphStyle?.lineNumberCount,
@@ -2749,6 +2900,12 @@ function buildStyleParagraphPropertiesXml(style, docGridLinePitch = null) {
   }
   appendParagraphSpacingXml(parts, paragraphStyle, docGridLinePitch != null ? { docGridLinePitch } : null, { styleContext: true });
   appendParagraphIndentXml(parts, paragraphStyle, "");
+  if (paragraphStyle.paragraphShading) {
+    parts.push(`<w:shd w:val="${paragraphStyle.paragraphShading.val}" w:color="${paragraphStyle.paragraphShading.color}" w:fill="${paragraphStyle.paragraphShading.fill}"/>`);
+  }
+  if (paragraphStyle.mirrorIndents) {
+    parts.push(`<w:mirrorIndents/>`);
+  }
   if (paragraphStyle.alignment) {
     parts.push(`<w:jc w:val="${paragraphStyle.alignment}"/>`);
   }
