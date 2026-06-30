@@ -3,6 +3,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readWps, normalizeComparableText } from "../src/index.js";
 import { wpsToDocxBuffer } from "../src/docx.js";
+import { lcidToBcp47 } from "../src/lcid.js";
+import { BRC_TYPE_NAMES, brcColorFromIco } from "../src/sprm.js";
 import { parseSectionSprms } from "../src/word-binary.js";
 import { readDocxMainText, readDocxDocumentXml, readZipEntry } from "./fixtures-docx.js";
 
@@ -314,6 +316,15 @@ test("converted DOCX maps parsed MS-DOC LIDs without unknown-language fallback",
   const sample6ExpectedXml = readDocxDocumentXml(await readFile("sample/sample6/expected.docx"));
   assert.match(sample6Xml, /<w:lang w:val="en-US" w:eastAsia="zh" w:bidi="ar"\/>/);
   assert.ok(countXmlLineEdits(sample6Xml, sample6ExpectedXml) < 4);
+});
+
+test("MS-DOC LID mapping uses spec LCID tables without generic language fallback", () => {
+  assert.equal(lcidToBcp47(0x0004), "zh-Hans");
+  assert.equal(lcidToBcp47(0x7804), "zh");
+  assert.equal(lcidToBcp47(0x0409), "en-US");
+  assert.equal(lcidToBcp47(0x040d), "he-IL");
+  assert.equal(lcidToBcp47(0x7c04), "zh-Hant");
+  assert.equal(lcidToBcp47(0x1000), null);
 });
 
 test("sample document.xml matches WPS expected export without metadata noise", async () => {
@@ -717,8 +728,19 @@ test("parses variable-length section border SPRMs", () => {
       0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
       0x00, 0x00, 0x00, 0x00,
     ])),
-    /Unsupported page border operand size 13/,
+    /Out-of-spec page border operand size 13/,
   );
+});
+
+test("MS-DOC border color and type enums use spec values without fallback", () => {
+  assert.equal(brcColorFromIco(0x00), "auto");
+  assert.equal(brcColorFromIco(0x09), "000080");
+  assert.equal(brcColorFromIco(0x10), "C0C0C0");
+  assert.throws(() => brcColorFromIco(0x11), /Out-of-spec MS-DOC Ico color index 17/);
+
+  assert.equal(BRC_TYPE_NAMES[0x14], "wave");
+  assert.equal(BRC_TYPE_NAMES[0x1B], "inset");
+  assert.equal(BRC_TYPE_NAMES[0x02], undefined);
 });
 
 test("emits section breaks and tab stops in converted DOCX", async () => {

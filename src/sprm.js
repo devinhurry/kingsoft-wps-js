@@ -148,8 +148,8 @@ const ALIGNMENT_MAP = { 0: "left", 1: "right", 2: "center", 3: "both", 4: "distr
 const WORD_ALIGNMENT_MAP = { 0: "left", 1: "center", 2: "right", 3: "both", 4: "distribute", 5: "numTab" };
 
 const SPRM_OPERAND_SIZE_BY_SPRA = [1, 1, 2, 4, 2, 2, -1, 3];
-// MS-DOC-SPEC/19 ICO: 0=auto, 1=black, 2=blue, 3=cyan, 4=green,
-// 5=magenta, 6=red. Use RGB hex for OOXML w:color.
+// MS-DOC-SPEC/19 Ico: value MUST be less than 0x11. Use RGB hex for
+// OOXML w:color; 0 is automatic color.
 const WW8_TEXT_COLOR_INDEXES = [
   "auto",
   "000000",
@@ -160,12 +160,12 @@ const WW8_TEXT_COLOR_INDEXES = [
   "FF0000",
   "FFFF00",
   "FFFFFF",
-  "0000FF",
-  "00FFFF",
-  "00FF00",
-  "FF00FF",
-  "FF0000",
+  "000080",
+  "008080",
+  "008000",
+  "800080",
   "800000",
+  "808000",
   "808080",
   "C0C0C0",
 ];
@@ -264,7 +264,7 @@ export function parseSprms(grpprl, skipIstd = false, cupx = 0) {
       size = grpprl[off] + 1;
     }
     if (!size || size < 0) {
-      throw new Error(`Unsupported SPRM operand size for 0x${sprm.toString(16)}`);
+      throw new Error(`Out-of-spec SPRM operand size for 0x${sprm.toString(16)}`);
     }
     if (off + size > grpprl.length) {
       if (sprm === 0xC60D) {
@@ -395,14 +395,33 @@ function applySprm(props, sprm, val, size) {
       props.langIdBidi = val.readUInt16LE(0);
       break;
     case 0x0835:
-    case 0x085C:
     case 0x2A02:
       props.bold = val[0] !== 0;
       break;
+    case 0x085C:
+      props.boldCs = val[0] !== 0;
+      break;
     case 0x0836:
-    case 0x085D:
     case 0x2A03:
       props.italic = val[0] !== 0;
+      break;
+    case 0x085D:
+      props.italicCs = val[0] !== 0;
+      break;
+    case 0x0837:
+      props.strike = val[0] !== 0;
+      break;
+    case 0x2A53:
+      props.dstrike = val[0] !== 0;
+      break;
+    case 0x083A:
+      props.smallCaps = val[0] !== 0;
+      break;
+    case 0x083B:
+      props.caps = val[0] !== 0;
+      break;
+    case 0x083C:
+      props.vanish = val[0] !== 0;
       break;
     case 0x2A0E:
     case 0x2A3E:
@@ -650,35 +669,50 @@ function parseBrc80(val) {
   const dptSpace = val[3] & 0x1F;
   if (brcType === 0) return null; // no border
   return {
-    val: BRC_TYPE_NAMES[brcType] ?? "single",
+    val: brcTypeToBorderName(brcType, "paragraph border"),
     color: brcColorFromIco(ico),
     sz: String(dptLineWidth),
     space: String(dptSpace),
   };
 }
 
-// BrcType values per MS-DOC-SPEC
+// MS-DOC-SPEC/19 BrcType values and their ST_Border references.
+// 0x05 has no ECMA-376 reference but is specified as a thin single solid line,
+// so it maps to the closest OOXML border value, single.
 export const BRC_TYPE_NAMES = {
   0x00: "none",
   0x01: "single",
-  0x02: "thick",
   0x03: "double",
-  0x05: "thinThickSmallGap",
+  0x05: "single",
   0x06: "dotted",
   0x07: "dashed",
   0x08: "dotDash",
   0x09: "dotDotDash",
   0x0A: "triple",
-  0x0B: "thinThickThinSmallGap",
-  0x0C: "thinThickMediumGap",
-  0x0D: "thickThinMediumGap",
-  0x0E: "thinThickLargeGap",
-  0x0F: "thickThinLargeGap",
-  0x16: "wave",
-  0x17: "doubleWave",
-  0x2A: "inset",
-  0x2B: "outset",
+  0x0B: "thinThickSmallGap",
+  0x0C: "thickThinSmallGap",
+  0x0D: "thinThickThinSmallGap",
+  0x0E: "thinThickMediumGap",
+  0x0F: "thickThinMediumGap",
+  0x10: "thinThickThinMediumGap",
+  0x11: "thinThickLargeGap",
+  0x12: "thickThinLargeGap",
+  0x13: "thinThickThinLargeGap",
+  0x14: "wave",
+  0x15: "doubleWave",
+  0x16: "dashSmallGap",
+  0x17: "dashDotStroked",
+  0x18: "threeDEmboss",
+  0x19: "threeDEngrave",
+  0x1A: "outset",
+  0x1B: "inset",
 };
+
+function brcTypeToBorderName(brcType, context) {
+  const borderName = BRC_TYPE_NAMES[brcType];
+  if (borderName) return borderName;
+  throw new Error(`Out-of-spec ${context} BrcType ${brcType}`);
+}
 
 // ico color palette index per MS-DOC-SPEC §ICO (0x00=auto)
 export function brcColorFromIco(ico) {
@@ -688,7 +722,9 @@ export function brcColorFromIco(ico) {
     "FF0000", "FFFF00", "FFFFFF", "000080", "008080",
     "008000", "800080", "800000", "808000", "808080", "C0C0C0",
   ];
-  return colors[ico] ?? "auto";
+  const color = colors[ico];
+  if (color) return color;
+  throw new Error(`Out-of-spec MS-DOC Ico color index ${ico}`);
 }
 
 function ww8TextColorHex(index) {
@@ -696,7 +732,7 @@ function ww8TextColorHex(index) {
   if (index >= 0 && index < WW8_TEXT_COLOR_INDEXES.length) {
     return WW8_TEXT_COLOR_INDEXES[index];
   }
-  throw new Error(`Unsupported WW8 text color index ${index}`);
+  throw new Error(`Out-of-spec MS-DOC Ico text color index ${index}`);
 }
 
 function ww8ShadeColorHex(index, autoHex) {
@@ -705,7 +741,7 @@ function ww8ShadeColorHex(index, autoHex) {
   if (index >= 0 && index < WW8_TEXT_COLOR_INDEXES.length) {
     return WW8_TEXT_COLOR_INDEXES[index];
   }
-  throw new Error(`Unsupported WW8 shading color index ${index}`);
+  throw new Error(`Out-of-spec MS-DOC Ico shading color index ${index}`);
 }
 
 function parseWw8Shade(val) {
@@ -816,12 +852,13 @@ function underlineStyleFromCode(code) {
     case 27:
       return "wavyHeavy";
     case 39:
+      return "dashLong";
     case 55:
       return "dashLongHeavy";
     case 43:
       return "wavyDouble";
     default:
-      throw new Error(`Unsupported underline style code ${code}`);
+      throw new Error(`Out-of-spec MS-DOC Kul underline value ${code}`);
   }
 }
 

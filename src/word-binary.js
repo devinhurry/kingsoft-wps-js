@@ -48,7 +48,7 @@ export function extractWordBinaryDocument({ wordDocument, table0, table1 = null,
 
   const fib = readFib(wordDocument);
   if ((fib.flags & FIB_F_COMPLEX) === 0) {
-    throw new Error("Unsupported Word binary document: expected a complex file with a CLX piece table");
+    throw new Error("Unimplemented Word binary document variant: non-complex files without a CLX piece table");
   }
 
   const tableStream = fib.whichTableStream === "1Table" ? table1 : table0;
@@ -133,7 +133,7 @@ function readFib(wordDocument) {
   const wssOffset = FIB_FC_LCB_START + FIB_FC_WSS_INDEX * 8;
   const dopOffset = FIB_FC_LCB_START + FIB_FC_DOP_INDEX * 8;
   if (tableStreamOffset + 8 > FIB_FC_LCB_START + fcLcbCount * 4) {
-    throw new Error("Unsupported Word binary document: FIB does not contain fcClx/lcbClx");
+    throw new Error("Unimplemented Word binary document variant: FIB does not contain fcClx/lcbClx");
   }
 
   return {
@@ -193,7 +193,7 @@ function parseDop(tableStream, fib) {
     throw new Error("Invalid Word binary document: DOP is outside the table stream");
   }
   if (lcbDop < 84) {
-    throw new Error(`Unsupported Word binary document: DOP is shorter than DopBase (${lcbDop} bytes)`);
+    throw new Error(`Out-of-spec Word binary document: DOP is shorter than DopBase (${lcbDop} bytes)`);
   }
   const dop = tableStream.subarray(fcDop, fcDop + lcbDop);
 
@@ -379,7 +379,7 @@ function assertWordDocument(wordDocument) {
     throw new TypeError("Expected WordDocument to be a Buffer");
   }
   if (wordDocument.length < 0x1aa || wordDocument.readUInt16LE(0) !== WORD_BINARY_MAGIC) {
-    throw new Error("Unsupported file: WordDocument stream does not contain a Word binary FIB");
+    throw new Error("Invalid input file: WordDocument stream does not contain a Word binary FIB");
   }
 }
 
@@ -442,7 +442,7 @@ function parseStandardBookmarks(tableStream, fib) {
   }
   const bkfDataSize = dataBytes / names.length;
   if (bkfDataSize < 4) {
-    throw new Error(`Unsupported Word bookmark BKF size ${bkfDataSize}`);
+    throw new Error(`Out-of-spec Word bookmark FBKF size ${bkfDataSize}`);
   }
   if (fib.lcbPlcfBkl !== (names.length + 1) * 4) {
     throw new Error("Invalid Word binary document: malformed Plcfbkl bookmark PLC");
@@ -463,7 +463,7 @@ function parseStandardBookmarks(tableStream, fib) {
 function parseLastSelection(tableStream, fib, bodyTextLength) {
   if (!fib.lcbWss) return null;
   if (fib.lcbWss !== SELSF_SIZE) {
-    throw new Error(`Unsupported Word binary document: expected ${SELSF_SIZE}-byte Selsf, got ${fib.lcbWss}`);
+    throw new Error(`Out-of-spec Word binary document: expected ${SELSF_SIZE}-byte Selsf, got ${fib.lcbWss}`);
   }
   assertTableRange(tableStream, fib.fcWss, fib.lcbWss, "Selsf");
 
@@ -507,12 +507,12 @@ function parseSttbfBkmk(sttbf) {
   }
   const fExtend = sttbf.readUInt16LE(0);
   if (fExtend !== 0xffff) {
-    throw new Error(`Unsupported SttbfBkmk: expected extended strings, got 0x${fExtend.toString(16)}`);
+    throw new Error(`Out-of-spec SttbfBkmk: expected extended strings, got 0x${fExtend.toString(16)}`);
   }
   const count = sttbf.readUInt16LE(2);
   const cbExtra = sttbf.readUInt16LE(4);
   if (cbExtra !== 0) {
-    throw new Error(`Unsupported SttbfBkmk: expected no extra data, got ${cbExtra} bytes`);
+    throw new Error(`Out-of-spec SttbfBkmk: expected no extra data, got ${cbExtra} bytes`);
   }
 
   const names = [];
@@ -748,7 +748,7 @@ function extractStyleSheet(tableStream, fib) {
   const cstd = stsh.readUInt16LE(2);
   const cbSTDBaseInFile = stsh.readUInt16LE(4);
   if (cbSTDBaseInFile !== 10 && cbSTDBaseInFile !== 18) {
-    throw new Error(`Unsupported Word stylesheet: invalid Stshif.cbSTDBaseInFile ${cbSTDBaseInFile}`);
+    throw new Error(`Out-of-spec Word stylesheet: invalid Stshif.cbSTDBaseInFile ${cbSTDBaseInFile}`);
   }
   const stiMaxWhenSaved = stsh.readUInt16LE(8); // Stshif offset 6 from stshi start
   const styles = new Array(cstd).fill(null);
@@ -1134,8 +1134,12 @@ function extractParagraphBordersFromGrpprl(grpprl) {
 // Unlike the primary parseBrc80(), this does NOT return null for brcType===0 (none),
 // because "none" borders carry meaningful dptSpace values that OOXML needs.
 function parseBrc80Raw(dptLineWidth, brcType, ico, dptSpace) {
+  const borderName = BRC_TYPE_NAMES[brcType];
+  if (!borderName) {
+    throw new Error(`Out-of-spec paragraph border BrcType ${brcType}`);
+  }
   return {
-    val: BRC_TYPE_NAMES[brcType] ?? "single",
+    val: borderName,
     sz: String(dptLineWidth),
     color: brcColorFromIco(ico),
     space: String(dptSpace & 0x1F), // dptSpace per MS-DOC-SPEC §Brc80: only bits 0-4
@@ -1172,29 +1176,7 @@ function extractCharacterPropertiesFromGrpprl(grpprl) {
 }
 
 function styleTextColorHex(index) {
-  const colors = [
-    "auto",
-    "000000",
-    "0000FF",
-    "00FFFF",
-    "00FF00",
-    "FF00FF",
-    "FF0000",
-    "FFFF00",
-    "FFFFFF",
-    "0000FF",
-    "00FFFF",
-    "00FF00",
-    "FF00FF",
-    "FF0000",
-    "800000",
-    "808080",
-    "C0C0C0",
-  ];
-  if (index >= 0 && index < colors.length) {
-    return colors[index];
-  }
-  throw new Error(`Unsupported style text color index ${index}`);
+  return brcColorFromIco(index);
 }
 
 function scanKnownSprm(grpprl, sprm, operandSize, apply) {
@@ -1316,7 +1298,7 @@ function sectionSprmOperandSize(sprm) {
     return -1;
   }
   if (!size || size < 0) {
-    throw new Error(`Unsupported section SPRM operand size for 0x${sprm.toString(16)}`);
+    throw new Error(`Out-of-spec section SPRM operand size for 0x${sprm.toString(16)}`);
   }
   return size;
 }
@@ -1431,11 +1413,11 @@ function applyPageBorderSprm(props, side, val) {
   // BrcOperand; MS-DOC-SPEC/19 requires BrcOperand.cb to be 8.
   const brc = val.length === 9 && val[0] === 8 ? val.subarray(1) : val;
   if (brc.length !== 4 && brc.length !== 8) {
-    throw new Error(`Unsupported page border operand size ${val.length}`);
+    throw new Error(`Out-of-spec page border operand size ${val.length}`);
   }
   const isNone = brc.every((byte) => byte === 0) || (brc[0] === 0 && brc[1] === 0);
   if (!isNone) {
-    throw new Error(`Unsupported non-empty page border on ${side}`);
+    throw new Error(`Unimplemented non-empty section page border parsing on ${side}`);
   }
   props.pageBorders ??= {};
   props.pageBorders[side] = { style: "none" };
@@ -1990,7 +1972,7 @@ function parseCellBorderSideArrayOperand(sprm, payload) {
     throw new Error(`Truncated cell border side array SPRM 0x${sprm.toString(16)}`);
   }
   if (payload.length % 4 !== 0) {
-    throw new Error(`Unsupported cell border side array length ${payload.length} in SPRM 0x${sprm.toString(16)}`);
+    throw new Error(`Out-of-spec cell border side array length ${payload.length} in SPRM 0x${sprm.toString(16)}`);
   }
 
   let side = null;
@@ -1998,7 +1980,7 @@ function parseCellBorderSideArrayOperand(sprm, payload) {
   else if (sprm === 0xD61B) side = "left";
   else if (sprm === 0xD61C) side = "bottom";
   else if (sprm === 0xD61D) side = "right";
-  else throw new Error(`Unsupported cell border side SPRM 0x${sprm.toString(16)}`);
+  else throw new Error(`Internal parser error: cell border side array called for SPRM 0x${sprm.toString(16)}`);
 
   const borders = [];
   for (let off = 0; off < payload.length; off += 4) {
@@ -2272,7 +2254,7 @@ function parseTableRowSprms(data, dataStream = null) {
           tableWidth = widthValue;
           tableWidthType = "pct";
         } else if (widthType !== 1 && widthType !== 0) {
-          throw new Error(`Unsupported table width type ${widthType} in sprmTTableWidth`);
+          throw new Error(`Out-of-spec table width type ${widthType} in sprmTTableWidth`);
         }
       }
     } else if (sprm === 0xF661) {
@@ -2458,7 +2440,7 @@ function parseTableIndent(data) {
   if (widthType === 3) {
     return { width: widthValue, type: "dxa" };
   }
-  throw new Error(`Unsupported sprmTWidthIndent width type ${widthType}`);
+  throw new Error(`Out-of-spec sprmTWidthIndent width type ${widthType}`);
 }
 
 function parseTableJustification(value, sprm) {
@@ -2467,7 +2449,7 @@ function parseTableJustification(value, sprm) {
   if (value === 0) return "left";
   if (value === 1) return "center";
   if (value === 2) return "right";
-  throw new Error(`Unsupported table justification ${value} in SPRM 0x${sprm.toString(16)}`);
+  throw new Error(`Out-of-spec table justification ${value} in SPRM 0x${sprm.toString(16)}`);
 }
 
 function inferTableWidth(rows) {
@@ -2677,11 +2659,11 @@ function parseTableBordersOperand(sprm, payload) {
 
   const entrySize = payload.length / TABLE_BORDER_SIDES.length;
   if (!Number.isInteger(entrySize)) {
-    throw new Error(`Unsupported table border SPRM length ${payload.length} for 0x${sprm.toString(16)}`);
+    throw new Error(`Out-of-spec table border SPRM length ${payload.length} for 0x${sprm.toString(16)}`);
   }
 
   if (entrySize !== 2 && entrySize !== 4 && entrySize !== 8) {
-    throw new Error(`Unsupported table border entry size ${entrySize} in SPRM 0x${sprm.toString(16)}`);
+    throw new Error(`Unimplemented table border entry size ${entrySize} in SPRM 0x${sprm.toString(16)}`);
   }
 
   const borders = {};
@@ -2734,7 +2716,7 @@ function parseBorderRecord(raw, sprm) {
     return createEmptyTableBorder();
   }
   if (raw.length !== 2 && raw.length !== 4 && raw.length !== 8) {
-    throw new Error(`Unsupported border record length ${raw.length} in SPRM 0x${sprm.toString(16)}`);
+    throw new Error(`Unimplemented border record length ${raw.length} in SPRM 0x${sprm.toString(16)}`);
   }
   return parseTableBorderEntry(raw, raw.length, sprm);
 }
@@ -2780,7 +2762,7 @@ function parseTableBorderEntry(raw, entrySize, sprm) {
     });
   }
 
-  throw new Error(`Unsupported table border entry size ${entrySize} in SPRM 0x${sprm.toString(16)}`);
+  throw new Error(`Internal parser error: table border entry size ${entrySize} in SPRM 0x${sprm.toString(16)}`);
 }
 
 function normalizeTableBorderRecord({ sprm, brcType, dptLineWidth, colorIndex = null, color = null, space = 0 }) {
@@ -2793,44 +2775,9 @@ function normalizeTableBorderRecord({ sprm, brcType, dptLineWidth, colorIndex = 
 }
 
 function tableBorderStyleFromBrcType(brcType, sprm) {
-  switch (brcType) {
-    case 0:
-      return "none";
-    case 1:
-    case 2:
-      return "single";
-    case 3:
-      return "double";
-    case 4:
-      return "dotted";
-    case 6:
-      return "thick";
-    case 7:
-      return "dash";
-    case 9:
-      return "dotDash";
-    case 10:
-      return "dotDotDash";
-    case 11:
-      return "wave";
-    case 20:
-      return "dottedHeavy";
-    case 23:
-      return "dashedHeavy";
-    case 25:
-      return "dashDotHeavy";
-    case 26:
-      return "dashDotDotHeavy";
-    case 27:
-      return "wavyHeavy";
-    case 39:
-    case 55:
-      return "dashLongHeavy";
-    case 43:
-      return "wavyDouble";
-    default:
-      throw new Error(`Unsupported table border type ${brcType} in SPRM 0x${sprm.toString(16)}`);
-  }
+  const borderName = BRC_TYPE_NAMES[brcType];
+  if (borderName) return borderName;
+  throw new Error(`Out-of-spec table border BrcType ${brcType} in SPRM 0x${sprm.toString(16)}`);
 }
 
 function colorIndexToHex(colorIndex) {
@@ -2838,10 +2785,8 @@ function colorIndexToHex(colorIndex) {
   if (colorIndex == null || colorIndex === 0) {
     return null;
   }
-  if (colorIndex === 1) {
-    return "000000";
-  }
-  throw new Error(`Unsupported table border color index ${colorIndex}`);
+  const color = brcColorFromIco(colorIndex);
+  return color === "auto" ? null : color;
 }
 
 function colorToHexFromBgr(color) {
@@ -2982,13 +2927,17 @@ function extractListData(tableStream, fib) {
         const nfc = tableStream[lvlOff + 4];
         const flags = tableStream[lvlOff + 5];
         const jc = flags & 3;
-        const fTentative = !!(flags & 0x40);
+        const fLegal = !!(flags & 0x04);
+        const fNoRestart = !!(flags & 0x08);
+        const fTentative = !!(flags & 0x80);
         const rgbxchNums = [];
         for (let j = 0; j < 9; j++) rgbxchNums.push(tableStream[lvlOff + 6 + j]);
         const ixchFollow = tableStream[lvlOff + 15];
         // skip dxaIndentSav(4) + unused2(4) = 8 bytes at offset 16
         const cbGrpprlChpx = tableStream[lvlOff + 24];
         const cbGrpprlPapx = tableStream[lvlOff + 25];
+        const ilvlRestartLim = tableStream[lvlOff + 26];
+        const grfhic = tableStream[lvlOff + 27];
         lvlOff += 28; // fixed LVLF header size (28 bytes per MS-DOC-SPEC §LVLF)
 
         // Read grpprlPapx then grpprlChpx (LVL stores papx first, then chpx)
@@ -3009,7 +2958,7 @@ function extractListData(tableStream, fib) {
         lvlOff += 2 + cch * 2; // skip cch + rgtchar
 
         const lvl = {
-          ilvl: i, iStartAt, nfc, jc, fTentative,
+          ilvl: i, iStartAt, nfc, jc, fLegal, fNoRestart, fTentative, ilvlRestartLim, grfhic,
           ixchFollow, rgbxchNums, xst,
           grpprlPapx, grpprlChpx,
         };
@@ -3041,13 +2990,24 @@ function extractListData(tableStream, fib) {
             lvl.fontCs = chpxProps.fontCs ?? null;
             lvl.fontSizeCs = chpxProps.fontSizeCs ?? null;
             lvl.fontHint = chpxProps.fontHint ?? null;
-            lvl.textColor = chpxProps.textColor ?? null;
-            lvl.bold = chpxProps.bold ?? null;
-            lvl.italic = chpxProps.italic ?? null;
-            lvl.charSpacing = chpxProps.charSpacing ?? null;
-            lvl.charWidth = chpxProps.charWidth ?? null;
-            lvl.fontSize = chpxProps.fontSize ?? null;
-          } catch(e) { /* ignore */ }
+	            lvl.textColor = chpxProps.textColor ?? null;
+	            lvl.bold = chpxProps.bold ?? null;
+	            lvl.boldCs = chpxProps.boldCs ?? null;
+	            lvl.italic = chpxProps.italic ?? null;
+	            lvl.italicCs = chpxProps.italicCs ?? null;
+	            lvl.caps = chpxProps.caps ?? null;
+	            lvl.smallCaps = chpxProps.smallCaps ?? null;
+	            lvl.strike = chpxProps.strike ?? null;
+	            lvl.dstrike = chpxProps.dstrike ?? null;
+	            lvl.vanish = chpxProps.vanish ?? null;
+	            lvl.charSpacing = chpxProps.charSpacing ?? null;
+	            lvl.charWidth = chpxProps.charWidth ?? null;
+	            lvl.fontSize = chpxProps.fontSize ?? null;
+	            lvl.kern = chpxProps.kern ?? null;
+	            lvl.textPosition = chpxProps.textPosition ?? null;
+	            lvl.underline = chpxProps.underline ?? null;
+	            lvl.underlineStyle = chpxProps.underlineStyle ?? null;
+	          } catch(e) { /* ignore */ }
         }
         lstf.lvlList.push(lvl);
       }
@@ -3064,6 +3024,43 @@ function extractListData(tableStream, fib) {
       const clfolvl = plfLfo[off + 12];
       result.lfoList.push({ lsid, clfolvl, index: i, lfolvlList: [] });
       off += 16;
+    }
+
+    // MS-DOC-SPEC/19 PlfLfo stores LFOData immediately after rgLfo, in
+    // parallel order with rgLfo. LFOLVL entries can override level starts even
+    // when they do not carry a full LVL formatting override.
+    for (const lfo of result.lfoList) {
+      if (off + 4 > plfLfo.length) {
+        throw new Error("Invalid Word binary document: truncated LFOData");
+      }
+      const cp = plfLfo.readUInt32LE(off);
+      off += 4;
+      lfo.cp = cp;
+      for (let j = 0; j < lfo.clfolvl; j += 1) {
+        if (off + 8 > plfLfo.length) {
+          throw new Error("Invalid Word binary document: truncated LFOLVL");
+        }
+        const iStartAt = plfLfo.readInt32LE(off);
+        const flags = plfLfo.readUInt32LE(off + 4);
+        const iLvl = flags & 0x0f;
+        const fStartAt = !!(flags & 0x10);
+        const fFormatting = !!(flags & 0x20);
+        if (iLvl > 0x08) {
+          throw new Error(`Out-of-spec LFOLVL level ${iLvl}`);
+        }
+        const lfolvl = { iLvl, fStartAt, fFormatting };
+        if (fStartAt) {
+          if (iStartAt < 0 || iStartAt > 0x7fff) {
+            throw new Error(`Out-of-spec LFOLVL start-at value ${iStartAt}`);
+          }
+          lfolvl.iStartAt = iStartAt;
+        }
+        off += 8;
+        if (fFormatting) {
+          throw new Error("Unimplemented LFOLVL full LVL formatting override");
+        }
+        lfo.lfolvlList.push(lfolvl);
+      }
     }
   }
 

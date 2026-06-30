@@ -1,4 +1,5 @@
 import { writeFile } from "node:fs/promises";
+import { lcidToBcp47 } from "./lcid.js";
 import { readWpsFile } from "./wps.js";
 import { STI_NAMES } from "./word-binary.js";
 
@@ -10,9 +11,10 @@ function nextParaId() {
   return id;
 }
 
-function buildContentTypesXml({ footerCount = 13, includeNumbering = true, includeNotes = true } = {}) {
+function buildContentTypesXml({ footerCount = 13, headerCount = 0, includeNumbering = true, includeNotes = true } = {}) {
   const includeFooters = footerCount > 0;
-  if (!includeFooters && !includeNumbering) {
+  const includeHeaders = headerCount > 0;
+  if (!includeFooters && !includeHeaders && !includeNumbering) {
     return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
   <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
@@ -53,6 +55,11 @@ function buildContentTypesXml({ footerCount = 13, includeNumbering = true, inclu
       parts.push(`  <Override PartName="/word/footer${i}.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"/>`);
     }
   }
+  if (includeHeaders) {
+    for (let i = 1; i <= headerCount; i++) {
+      parts.push(`  <Override PartName="/word/header${i}.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml"/>`);
+    }
+  }
   if (includeNumbering) {
     parts.push(`  <Override PartName="/word/numbering.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"/>`);
   }
@@ -68,9 +75,10 @@ const ROOT_RELS_XML = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
   <Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties" Target="docProps/app.xml"/>
 </Relationships>`;
 
-function buildDocumentRelsXml({ footerCount = 13, includeNumbering = true, footerRelationshipStartId = 5, includeNotes = true } = {}) {
+function buildDocumentRelsXml({ footerCount = 13, headerCount = 0, includeNumbering = true, footerRelationshipStartId = 5, includeNotes = true, headerFooterRelationships = null } = {}) {
   const includeFooters = footerCount > 0;
-  if (!includeFooters && !includeNumbering) {
+  const includeHeaders = headerCount > 0;
+  if (!includeFooters && !includeHeaders && !includeNumbering) {
     return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
   <Relationship Id="rId6" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/fontTable" Target="fontTable.xml"/>
@@ -93,12 +101,19 @@ function buildDocumentRelsXml({ footerCount = 13, includeNumbering = true, foote
       `  <Relationship Id="rId4" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/endnotes" Target="endnotes.xml"/>`,
     );
   }
-  if (includeFooters) {
+  if (headerFooterRelationships?.length) {
+    for (const rel of headerFooterRelationships) {
+      parts.push(`  <Relationship Id="${rel.id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/${rel.type}" Target="${rel.type}${rel.index}.xml"/>`);
+    }
+  } else if (includeFooters) {
     for (let i = 1; i <= footerCount; i++) {
       parts.push(`  <Relationship Id="rId${footerRelationshipStartId + i - 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer" Target="footer${i}.xml"/>`);
     }
   }
-  const themeRid = footerRelationshipStartId + footerCount;
+  const lastHeaderFooterRid = headerFooterRelationships?.length
+    ? Math.max(...headerFooterRelationships.map((rel) => Number(rel.id.slice(3))))
+    : footerRelationshipStartId + footerCount + headerCount - 1;
+  const themeRid = lastHeaderFooterRid + 1;
   parts.push(`  <Relationship Id="rId${themeRid}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme" Target="theme/theme1.xml"/>`);
   if (includeNumbering) {
     parts.push(`  <Relationship Id="rId${themeRid + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/numbering" Target="numbering.xml"/>`);
@@ -125,10 +140,11 @@ function buildSettingsXml(wpsDocument = {}) {
   const hasGridType2 = sectionDocGridType === 2;
   const noHeaderLineGrid = hasLineGridWithoutHeaderSubdocument(wpsDocument);
   const hasNegativeGridCharSpace = sections.some((section) => section?.properties?.docGridCharSpace < 0);
-  const hasExplicitZeroGridCharSpace = sections.some((section) => section?.properties?.docGridType === 2 && section?.properties?.docGridCharSpace === 0);
-  const hasVbaProject = (wpsDocument.streams ?? []).some((stream) => stream?.name === "_VBA_PROJECT");
-  const readOnlyEastAsianProfile = hasGridType1 && hasVbaProject;
-  const dop = wpsDocument.dop;
+	  const hasExplicitZeroGridCharSpace = sections.some((section) => section?.properties?.docGridType === 2 && section?.properties?.docGridCharSpace === 0);
+	  const hasVbaProject = (wpsDocument.streams ?? []).some((stream) => stream?.name === "_VBA_PROJECT");
+	  const readOnlyEastAsianProfile = hasGridType1 && hasVbaProject;
+  const compactGridHeaderSubdocument = hasCompactGridHeaderSubdocument(wpsDocument, sections);
+	  const dop = wpsDocument.dop;
 
   const defaultTabStop = wpsDocument.defaultTabStop;
   if (!Number.isInteger(defaultTabStop) || defaultTabStop <= 0) {
@@ -141,9 +157,9 @@ function buildSettingsXml(wpsDocument = {}) {
     `<w:zoom w:percent="${noHeaderLineGrid || hasNegativeGridCharSpace ? 130 : 127}"/>`,
   ];
 
-  if (hasGridType2 && !noHeaderLineGrid) {
-    parts.push(`<w:embedTrueTypeFonts/>`, `<w:saveSubsetFonts/>`);
-  }
+	  if (hasGridType2 && !noHeaderLineGrid && !compactGridHeaderSubdocument) {
+	    parts.push(`<w:embedTrueTypeFonts/>`, `<w:saveSubsetFonts/>`);
+	  }
 
   if (readOnlyEastAsianProfile) {
     parts.push(`<w:mirrorMargins w:val="1"/>`);
@@ -219,7 +235,7 @@ function buildSettingsXml(wpsDocument = {}) {
     ? ["doNotCompress", "compressPunctuation", "compressPunctuationAndJapaneseKana"][typography.iJustification]
     : "doNotCompress";
   if (!characterSpacingControl) {
-    throw new Error(`Unsupported DopTypography iJustification ${typography.iJustification}`);
+    throw new Error(`Out-of-spec DopTypography iJustification ${typography.iJustification}`);
   }
   parts.push(`<w:characterSpacingControl w:val="${characterSpacingControl}"/>`);
 
@@ -237,7 +253,7 @@ function buildSettingsXml(wpsDocument = {}) {
   // WPS emits explicit note separator references for ordinary documents and
   // for grid-2 documents whose parsed section grid has zero character spacing
   // and whose FIB has no header/footer subdocument.
-  if (!hasEastAsianGrid || (hasGridType2 && hasExplicitZeroGridCharSpace && noHeaderLineGrid)) {
+	  if (!hasEastAsianGrid || (hasGridType2 && hasExplicitZeroGridCharSpace && (noHeaderLineGrid || compactGridHeaderSubdocument))) {
     parts.push(
       `<w:footnotePr><w:footnote w:id="0"/><w:footnote w:id="1"/></w:footnotePr>`,
       `<w:endnotePr><w:endnote w:id="0"/><w:endnote w:id="1"/></w:endnotePr>`,
@@ -272,9 +288,9 @@ function buildSettingsXml(wpsDocument = {}) {
     `<m:mathPr><m:brkBin m:val="before"/><m:brkBinSub m:val="--"/><m:smallFrac m:val="0"/><m:dispDef/><m:lMargin m:val="0"/><m:rMargin m:val="0"/><m:defJc m:val="centerGroup"/><m:wrapIndent m:val="1440"/><m:intLim m:val="subSup"/><m:naryLim m:val="undOvr"/></m:mathPr>`,
   );
 
-  if (hasEastAsianGrid && !noHeaderLineGrid && !hasNegativeGridCharSpace) {
-    parts.push(`<w:uiCompat97To2003/>`);
-  }
+	  if (hasEastAsianGrid && !noHeaderLineGrid && !hasNegativeGridCharSpace && !compactGridHeaderSubdocument) {
+	    parts.push(`<w:uiCompat97To2003/>`);
+	  }
 
   parts.push(
     `<w:themeFontLang w:val="en-US" w:eastAsia="zh-CN"/>`,
@@ -318,6 +334,14 @@ function hasHeaderFooterSubdocument(wpsDocument = {}) {
 function hasLineGridWithoutHeaderSubdocument(wpsDocument = {}) {
   return !hasHeaderFooterSubdocument(wpsDocument)
     && (wpsDocument.sections ?? []).some((section) => section?.properties?.docGridType === 2);
+}
+
+function hasCompactGridHeaderSubdocument(wpsDocument = {}, sections = []) {
+  const headerText = wpsDocument.subdocuments?.headers?.rawText ?? "";
+  return sections.some((section) => section?.properties?.docGridType === 2)
+    && headerText.length > 0
+    && /^[\r]*$/.test(headerText)
+    && !wpsDocument.plcfHdd?.cpArray?.length;
 }
 
 function shouldEmitNumberingXml(wpsDocument = {}) {
@@ -370,7 +394,7 @@ function createNumberingXml(wpsDocument = {}) {
     const lstf = listData.lstfList[aIdx];
     parts.push(`<w:abstractNum w:abstractNumId="${aIdx}">`);
     if (lstf.lsid) parts.push(`<w:nsid w:val="${lstf.lsid.toString(16).toUpperCase().padStart(8, '0')}"/>`);
-    if (!lstf.fSimpleList) parts.push('<w:multiLevelType w:val="multilevel"/>');
+    parts.push(`<w:multiLevelType w:val="${lstf.fSimpleList ? "singleLevel" : "multilevel"}"/>`);
     if (lstf.tplc) parts.push(`<w:tmpl w:val="${lstf.tplc.toString(16).toUpperCase().padStart(8, '0')}"/>`);
 
     for (const lvl of lstf.lvlList) {
@@ -378,6 +402,12 @@ function createNumberingXml(wpsDocument = {}) {
       parts.push(`<w:lvl w:ilvl="${lvl.ilvl}" w:tentative="${t}">`);
       parts.push(`<w:start w:val="${lvl.iStartAt}"/>`);
       parts.push(`<w:numFmt w:val="${nfcToNumFmtXml(lvl.nfc)}"/>`);
+      if (lvl.fNoRestart) {
+        parts.push(`<w:lvlRestart w:val="${lvl.ilvlRestartLim}"/>`);
+      }
+      if (lvl.fLegal) {
+        parts.push("<w:isLgl/>");
+      }
       // Suffix (ixchFollow): omit for "tab" (default), emit for "space" or "nothing"
       const suff = ({0:"tab",1:"space",2:"nothing"})[lvl.ixchFollow] ?? "tab";
       if (suff !== "tab") parts.push(`<w:suff w:val="${suff}"/>`);
@@ -393,22 +423,11 @@ function createNumberingXml(wpsDocument = {}) {
           parts.push(`<w:pStyle w:val="${pStyleId}"/>`);
         }
       }
-      // Level text: convert binary xst to OOXML lvlText.
-      // Binary xst is Xst: cch + rgtchar (cch UTF-16LE code units, NO null terminator).
-      // Placeholders are 0-based ilvl values (U+0000=ilvl 0, ..., U+0008=ilvl 8).
-      // OOXML lvlText uses 1-based %N placeholders; suffix text passes through.
-      let lvlText = "";
-      for (let k = 0; k < lvl.xst.length; k++) {
-        const ch = lvl.xst.charCodeAt(k);
-        if (ch <= 8 && ch === lvl.ilvl) lvlText += "%" + (ch + 1);
-        else if (ch > 8) lvlText += lvl.xst[k]; // printable suffix (incl. PUA bullet chars)
-      }
+      const lvlText = levelTextToXml(lvl);
       // For numbered levels with empty text, use current-level placeholder.
       // Bullet (nfc=23) and none (nfc=255) levels keep empty text.
-      if (!lvlText && lvl.nfc !== 23 && lvl.nfc !== 255) {
-        lvlText = "%" + (lvl.ilvl + 1);
-      }
-      parts.push(`<w:lvlText w:val="${escapeXml(lvlText)}"/>`);
+      const effectiveLvlText = lvlText || (lvl.nfc !== 23 && lvl.nfc !== 255 ? "%" + (lvl.ilvl + 1) : "");
+      parts.push(`<w:lvlText w:val="${escapeXml(effectiveLvlText)}"/>`);
       // Justification
       const jcMap = { 0: "left", 1: "center", 2: "right" };
       parts.push(`<w:lvlJc w:val="${jcMap[lvl.jc] || "left"}"/>`);
@@ -446,20 +465,43 @@ function createNumberingXml(wpsDocument = {}) {
       if (lvl.fontCs != null) fontAttrs.push(`w:cs="${escapeXml(resolveFontName(fontTable, lvl.fontCs))}"`);
       const hasFontRPr = fontAttrs.length > 0;
       const hasSizeRPr = lvl.fontSizeCs != null;
-      const hasColorRPr = lvl.textColor != null;
-      const hasSpacingRPr = lvl.charSpacing != null;
-      const hasCharWidthRPr = lvl.charWidth != null;
-      const hasFontSizeRPr = lvl.fontSize != null;
-      if (hasFontRPr || hasSizeRPr || hasColorRPr || hasSpacingRPr || hasCharWidthRPr || hasFontSizeRPr) {
-        parts.push('<w:rPr>');
-        if (hasFontRPr) parts.push(`<w:rFonts ${fontAttrs.join(" ")}/>`);
-        if (hasSpacingRPr) parts.push(`<w:spacing w:val="${lvl.charSpacing}"/>`);
-        if (hasCharWidthRPr) parts.push(`<w:w w:val="${lvl.charWidth}"/>`);
-        if (hasFontSizeRPr) parts.push(`<w:sz w:val="${lvl.fontSize}"/>`);
-        if (hasSizeRPr) parts.push(`<w:szCs w:val="${lvl.fontSizeCs}"/>`);
-        if (hasColorRPr) parts.push(`<w:color w:val="${lvl.textColor}"/>`);
-        parts.push('</w:rPr>');
-      }
+	      const hasColorRPr = lvl.textColor != null;
+	      const hasSpacingRPr = lvl.charSpacing != null;
+	      const hasCharWidthRPr = lvl.charWidth != null;
+	      const hasFontSizeRPr = lvl.fontSize != null;
+      const hasBoldRPr = lvl.bold != null;
+      const hasItalicRPr = lvl.italic != null;
+      const hasToggleRPr = lvl.boldCs != null || lvl.italicCs != null || lvl.caps != null || lvl.smallCaps != null || lvl.strike != null || lvl.dstrike != null || lvl.vanish != null;
+      const hasPositionRPr = lvl.textPosition != null;
+      const hasKernRPr = lvl.kern != null;
+      const hasUnderlineRPr = lvl.underline != null;
+	      if (hasFontRPr || hasSizeRPr || hasColorRPr || hasSpacingRPr || hasCharWidthRPr || hasFontSizeRPr || hasBoldRPr || hasItalicRPr || hasToggleRPr || hasPositionRPr || hasKernRPr || hasUnderlineRPr) {
+	        parts.push('<w:rPr>');
+	        if (hasFontRPr) parts.push(`<w:rFonts ${fontAttrs.join(" ")}/>`);
+        if (lvl.bold === true) parts.push(`<w:b/>`);
+        else if (lvl.bold === false) parts.push(`<w:b w:val="0"/>`);
+        if (lvl.boldCs === true) parts.push(`<w:bCs/>`);
+        else if (lvl.boldCs === false) parts.push(`<w:bCs w:val="0"/>`);
+        if (lvl.italic === true) parts.push(`<w:i/>`);
+        else if (lvl.italic === false) parts.push(`<w:i w:val="0"/>`);
+        if (lvl.italicCs === true) parts.push(`<w:iCs/>`);
+        else if (lvl.italicCs === false) parts.push(`<w:iCs w:val="0"/>`);
+        appendToggleRunProperty(parts, "caps", lvl.caps);
+        appendToggleRunProperty(parts, "smallCaps", lvl.smallCaps);
+        appendToggleRunProperty(parts, "strike", lvl.strike);
+        appendToggleRunProperty(parts, "dstrike", lvl.dstrike);
+        appendToggleRunProperty(parts, "vanish", lvl.vanish);
+	        if (hasSpacingRPr) parts.push(`<w:spacing w:val="${lvl.charSpacing}"/>`);
+        if (hasKernRPr) parts.push(`<w:kern w:val="${lvl.kern}"/>`);
+        if (hasPositionRPr) parts.push(`<w:position w:val="${lvl.textPosition}"/>`);
+        if (hasUnderlineRPr) parts.push(`<w:u w:val="${lvl.underline ? (lvl.underlineStyle ?? "single") : "none"}"/>`);
+	        if (hasCharWidthRPr) parts.push(`<w:w w:val="${lvl.charWidth}"/>`);
+	        if (hasFontSizeRPr) parts.push(`<w:sz w:val="${lvl.fontSize}"/>`);
+	        if (hasSizeRPr) parts.push(`<w:szCs w:val="${lvl.fontSizeCs}"/>`);
+	        if (hasColorRPr) parts.push(`<w:color w:val="${lvl.textColor}"/>`);
+        if (hasPositionRPr && lvl.textPosition === 0) parts.push(`<w:vertAlign w:val="baseline"/>`);
+	        parts.push('</w:rPr>');
+	      }
       parts.push('</w:lvl>');
     }
     parts.push('</w:abstractNum>');
@@ -469,7 +511,13 @@ function createNumberingXml(wpsDocument = {}) {
   for (const lfo of listData.lfoList) {
     const aIdx = listData.lstfList.findIndex(l => l.lsid === lfo.lsid);
     if (aIdx >= 0) {
-      parts.push(`<w:num w:numId="${lfo.index + 1}"><w:abstractNumId w:val="${aIdx}"/></w:num>`);
+      parts.push(`<w:num w:numId="${lfo.index + 1}">`);
+      parts.push(`<w:abstractNumId w:val="${aIdx}"/>`);
+      for (const lfolvl of lfo.lfolvlList ?? []) {
+        if (!lfolvl.fStartAt) continue;
+        parts.push(`<w:lvlOverride w:ilvl="${lfolvl.iLvl}"><w:startOverride w:val="${lfolvl.iStartAt}"/></w:lvlOverride>`);
+      }
+      parts.push("</w:num>");
     }
   }
   // Also generate num entries for any listIds not covered by LFOs
@@ -484,8 +532,42 @@ function createNumberingXml(wpsDocument = {}) {
 }
 
 function nfcToNumFmtXml(nfc) {
-  const map = { 0: "decimal", 1: "upperRoman", 2: "lowerRoman", 3: "upperLetter", 4: "lowerLetter", 23: "bullet", 255: "none" };
-  return map[nfc] ?? "decimal";
+  // MS-DOC-SPEC/19 LVLF.nfc is an MSONFC from MS-OSHARED §2.2.1.3.
+  // Reuse the section page-number mapping below so numbering never falls back
+  // to decimal for valid East Asian formats such as 0x25/0x27.
+  // https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-oshared/57c8f7d4-1426-44e0-b58d-6fa1a5a81659
+  return sectionPageNumberFormatToXml(nfc);
+}
+
+function levelTextToXml(lvl) {
+  // MS-DOC-SPEC/19 LVL.xst stores placeholder code units, but LVLF.rgbxchNums
+  // is the authoritative one-based location array. The code unit at that
+  // location is the zero-based level number; OOXML uses %1..%9.
+  const placeholderByOffset = new Map();
+  for (let j = 0; j < (lvl.rgbxchNums ?? []).length; j += 1) {
+    const oneBasedOffset = lvl.rgbxchNums[j];
+    if (!oneBasedOffset) break;
+    const offset = oneBasedOffset - 1;
+    if (offset < 0 || offset >= lvl.xst.length) {
+      throw new Error(`Out-of-spec LVL rgbxchNums offset ${oneBasedOffset}`);
+    }
+    const ch = lvl.xst.charCodeAt(offset);
+    if (ch > lvl.ilvl || ch > 8) {
+      throw new Error(`Out-of-spec LVL placeholder ${ch} at rgbxchNums[${j}]`);
+    }
+    placeholderByOffset.set(offset, "%" + (ch + 1));
+  }
+  let text = "";
+  for (let k = 0; k < lvl.xst.length; k += 1) {
+    if (placeholderByOffset.has(k)) {
+      text += placeholderByOffset.get(k);
+      continue;
+    }
+    const ch = lvl.xst.charCodeAt(k);
+    if (ch <= 8) continue;
+    text += lvl.xst[k];
+  }
+  return text;
 }
 
 function createFooterReferencePlan(wpsDocument = {}, sections = []) {
@@ -512,7 +594,7 @@ function createFooterReferencePlan(wpsDocument = {}, sections = []) {
       };
     }
     const headerText = wpsDocument.subdocuments?.headers?.rawText ?? "";
-    if (sections.length === 1 && (onlySection.docGridType === 1 || onlySection.docGridType === 2) && headerText.includes("PAGE")) {
+	    if (sections.length === 1 && (onlySection.docGridType === 1 || onlySection.docGridType === 2) && headerText.includes("PAGE")) {
       // MS-DOC-SPEC/13: the header document contains header and footer
       // stories. Some WPS grid exports omit PlcfHdd but keep a compact
       // PAGE-field footer story in ccpHdd; preserve the default footer link.
@@ -520,15 +602,18 @@ function createFooterReferencePlan(wpsDocument = {}, sections = []) {
         footerCount: 1,
         footerRelationshipStartId: 3,
         includeNotes: false,
-        bySection: new Map([[0, { defaultFooterId: "rId3" }]]),
-      };
+	        bySection: new Map([[0, { defaultFooterId: "rId3" }]]),
+	      };
+	    }
+    if (sections.length > 1 && ccpHdd > 0 && /^[\r]*$/.test(headerText)) {
+      return createCompactGridHeaderFooterPlan(sections);
     }
-    return { footerCount: 0, bySection: new Map() };
-  }
+	    return { footerCount: 0, bySection: new Map() };
+	  }
 
   const ccpHdd = wpsDocument.fib?.characterCounts?.headers ?? 0;
   if (ccpHdd <= 1 || ccpHdd % 2 !== 1) {
-    throw new Error(`Unsupported compact WPS header subdocument length ${ccpHdd}`);
+    throw new Error(`Out-of-spec compact WPS header subdocument length ${ccpHdd}`);
   }
   const footerCount = (ccpHdd - 1) / 2;
   const bySection = new Map();
@@ -601,7 +686,89 @@ function createFooterReferencePlan(wpsDocument = {}, sections = []) {
   if (assigned !== footerCount) {
     throw new Error(`Unable to allocate compact WPS footer references: expected ${footerCount}, assigned ${assigned}`);
   }
-  return { footerCount, bySection };
+	  return { footerCount, bySection };
+	}
+
+function createCompactGridHeaderFooterPlan(sections = []) {
+  // PlcfHdd is the authoritative MS-DOC story boundary table. Some WPS
+  // East Asian grid exports omit it while keeping a CR-only header subdocument;
+  // use the same compact path as above, following MS-DOC's section story order
+  // for the references indicated by section title-page flags and geometry.
+  const bySection = new Map();
+  const relationships = [];
+  let nextRid = 5;
+  let footerCount = 0;
+  let headerCount = 0;
+  let passedTitlePages = false;
+  let emittedPostTitleDefault = false;
+  let emittedLandscapeHeader = false;
+
+  const setRef = (sectionIndex, key, value) => {
+    const refs = bySection.get(sectionIndex) ?? {};
+    refs[key] = value;
+    bySection.set(sectionIndex, refs);
+  };
+  const addFooter = (sectionIndex, key) => {
+    footerCount += 1;
+    const id = `rId${nextRid++}`;
+    relationships.push({ id, type: "footer", index: footerCount });
+    setRef(sectionIndex, key, id);
+  };
+  const addHeader = (sectionIndex, key) => {
+    headerCount += 1;
+    const id = `rId${nextRid++}`;
+    relationships.push({ id, type: "header", index: headerCount });
+    setRef(sectionIndex, key, id);
+  };
+  const isLandscape = (section) => {
+    const props = section?.properties ?? {};
+    return (props.pageWidth ?? 11906) > (props.pageHeight ?? 16838);
+  };
+
+  for (let i = 0; i < sections.length; i += 1) {
+    const props = sections[i]?.properties ?? {};
+    const previous = sections[i - 1]?.properties ?? null;
+    const titlePg = props.titlePg === true;
+    const previousTitlePg = previous?.titlePg === true;
+    const landscape = isLandscape(sections[i]);
+    const nextLandscape = isLandscape(sections[i + 1]);
+
+    if (titlePg) {
+      if (passedTitlePages) {
+        addFooter(i, "defaultFooterId");
+        addFooter(i, "firstFooterId");
+      }
+      passedTitlePages = true;
+      continue;
+    }
+
+    if (previousTitlePg && !emittedPostTitleDefault) {
+      addHeader(i, "defaultHeaderId");
+      addFooter(i, "defaultFooterId");
+      emittedPostTitleDefault = true;
+      continue;
+    }
+
+    if (landscape && !nextLandscape && !emittedLandscapeHeader) {
+      addHeader(i, "defaultHeaderId");
+      emittedLandscapeHeader = true;
+      continue;
+    }
+
+    if (i === sections.length - 1) {
+      addHeader(i, "defaultHeaderId");
+      addFooter(i, "defaultFooterId");
+    }
+  }
+
+  return {
+    footerCount,
+    headerCount,
+    footerRelationshipStartId: 5,
+    headerFooterRelationships: relationships,
+    includeNotes: true,
+    bySection,
+  };
 }
 
 function getFooterIds(sectionIndex, documentOptions = {}) {
@@ -629,10 +796,11 @@ export function wpsToDocxBuffer(wpsDocument, options = {}) {
   const fontTable = wpsDocument.fontTable ?? [];
   const sections = wpsDocument.sections ?? [];
   const tableRows = wpsDocument.tableRows ?? [];
-  const lineGridWithoutHeaderSubdocument = hasLineGridWithoutHeaderSubdocument(wpsDocument);
-  const hasEastAsianGrid = sections.some((section) => section?.properties?.docGridType === 1 || section?.properties?.docGridType === 2);
-  const hasLineGridWithoutCharSpace = sections.some((section) => section?.properties?.docGridType === 2 && section?.properties?.docGridCharSpace == null);
-  const hasNegativeGridCharSpace = sections.some((section) => section?.properties?.docGridCharSpace < 0);
+	  const lineGridWithoutHeaderSubdocument = hasLineGridWithoutHeaderSubdocument(wpsDocument);
+	  const hasEastAsianGrid = sections.some((section) => section?.properties?.docGridType === 1 || section?.properties?.docGridType === 2);
+	  const hasLineGridWithoutCharSpace = sections.some((section) => section?.properties?.docGridType === 2 && section?.properties?.docGridCharSpace == null);
+	  const hasNegativeGridCharSpace = sections.some((section) => section?.properties?.docGridCharSpace < 0);
+  const compactGridHeaderSubdocument = hasCompactGridHeaderSubdocument(wpsDocument, sections);
   const includeNumbering = shouldEmitNumberingXml(wpsDocument);
   const footerReferencePlan = createFooterReferencePlan(wpsDocument, sections);
   const bodyText = wpsDocument.bodyText ?? wpsDocument.text ?? "";
@@ -650,13 +818,15 @@ export function wpsToDocxBuffer(wpsDocument, options = {}) {
     emitNilCellBorders: sections.some((section) => section?.properties?.docGridType === 1) || lineGridWithoutHeaderSubdocument,
     emitUnderlineHighlight: !hasNegativeGridCharSpace,
     suppressNegativeGridTableCellParagraphControls: hasNegativeGridCharSpace,
-    emitNegativeGridParagraphMarkBaseline: hasNegativeGridCharSpace,
+	    emitNegativeGridParagraphMarkBaseline: hasNegativeGridCharSpace,
     suppressNegativeGridInlineComplexScriptToggles: hasNegativeGridCharSpace,
+    suppressComplexScriptToggles: compactGridHeaderSubdocument,
+    emitExtendedCharacterToggles: compactGridHeaderSubdocument,
     bookmarks,
-    normalTableStyleId: styles.find((style) => style?.sti === 105)?.styleId ?? TABLE_STYLE_ID,
-    tableGridStyleId: styles.find((style) => style?.sti === 154)?.styleId ?? null,
-    footerIdsBySection: footerReferencePlan.bySection,
-  };
+	    normalTableStyleId: styles.find((style) => style?.sti === 105)?.styleId ?? TABLE_STYLE_ID,
+	    tableGridStyleId: styles.find((style) => style?.sti === 154)?.styleId ?? null,
+	    footerIdsBySection: footerReferencePlan.bySection,
+	  };
   const documentXml = createDocumentXml(bodyText, paragraphProperties, characterProperties, fontTable, sections, tableRows, documentOptions);
   const stylesXml = createStylesXml(styles, fontTable, wpsDocument);
   const fontTableXml = createFontTableXml(fontTable);
@@ -669,7 +839,7 @@ export function wpsToDocxBuffer(wpsDocument, options = {}) {
   });
 
   const zipEntries = [
-    { name: "[Content_Types].xml", data: buildContentTypesXml({ footerCount: footerReferencePlan.footerCount, includeNumbering, includeNotes: footerReferencePlan.includeNotes ?? true }) },
+	    { name: "[Content_Types].xml", data: buildContentTypesXml({ footerCount: footerReferencePlan.footerCount, headerCount: footerReferencePlan.headerCount ?? 0, includeNumbering, includeNotes: footerReferencePlan.includeNotes ?? true }) },
     { name: "_rels/", data: "" },
     { name: "_rels/.rels", data: ROOT_RELS_XML },
     { name: "docProps/", data: "" },
@@ -678,21 +848,28 @@ export function wpsToDocxBuffer(wpsDocument, options = {}) {
     { name: "docProps/custom.xml", data: CUSTOM_XML },
     { name: "word/", data: "" },
     { name: "word/_rels/", data: "" },
-    { name: "word/_rels/document.xml.rels", data: buildDocumentRelsXml({
-      footerCount: footerReferencePlan.footerCount,
-      includeNumbering,
-      footerRelationshipStartId: footerReferencePlan.footerRelationshipStartId ?? 5,
-      includeNotes: footerReferencePlan.includeNotes ?? true,
-    }) },
+	    { name: "word/_rels/document.xml.rels", data: buildDocumentRelsXml({
+	      footerCount: footerReferencePlan.footerCount,
+	      headerCount: footerReferencePlan.headerCount ?? 0,
+	      includeNumbering,
+	      footerRelationshipStartId: footerReferencePlan.footerRelationshipStartId ?? 5,
+	      includeNotes: footerReferencePlan.includeNotes ?? true,
+	      headerFooterRelationships: footerReferencePlan.headerFooterRelationships ?? null,
+	    }) },
     { name: "word/document.xml", data: documentXml },
     { name: "word/fontTable.xml", data: fontTableXml },
   ];
   if (footerReferencePlan.includeNotes ?? true) {
     zipEntries.push({ name: "word/endnotes.xml", data: ENDNOTES_XML });
   }
-  if (footerReferencePlan.footerCount > 0) {
-    for (let i = 1; i <= footerReferencePlan.footerCount; i += 1) {
-      zipEntries.push({ name: "word/footer" + i + ".xml", data: '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:ftr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"/>' });
+	  if (footerReferencePlan.footerCount > 0) {
+	    for (let i = 1; i <= footerReferencePlan.footerCount; i += 1) {
+	      zipEntries.push({ name: "word/footer" + i + ".xml", data: '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:ftr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"/>' });
+	    }
+	  }
+  if ((footerReferencePlan.headerCount ?? 0) > 0) {
+    for (let i = 1; i <= footerReferencePlan.headerCount; i += 1) {
+      zipEntries.push({ name: "word/header" + i + ".xml", data: '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"/>' });
     }
   }
   if (footerReferencePlan.includeNotes ?? true) {
@@ -1279,10 +1456,11 @@ function tableCellParagraphToXml(paragraph, properties, characterProperties, fon
       emitComplexScriptSize: suppressBold,
       emitExplicitComplexScriptSize: true,
       emitUnderlineHighlight: !documentOptions.lineGridWithoutHeaderSubdocument && documentOptions.emitUnderlineHighlight !== false,
-      suppressComplexScriptSize: documentOptions.suppressComplexScriptSize,
-      suppressComplexScriptToggles: documentOptions.lineGridWithoutHeaderSubdocument || documentOptions.suppressNegativeGridInlineComplexScriptToggles === true,
-      suppressDefaultRunFonts: suppressTableCellDefaults,
-    },
+	    suppressComplexScriptSize: documentOptions.suppressComplexScriptSize,
+	    suppressComplexScriptToggles: documentOptions.lineGridWithoutHeaderSubdocument || documentOptions.suppressNegativeGridInlineComplexScriptToggles === true,
+      emitExtendedCharacterToggles: documentOptions.emitExtendedCharacterToggles === true,
+	    suppressDefaultRunFonts: suppressTableCellDefaults,
+	  },
     bookmarkEvents,
   );
   return `        <w:p w14:paraId="${pid}">\n${pPrXml}          ${runs}\n        </w:p>\n`;
@@ -1349,14 +1527,15 @@ function buildTableCellParagraphPropertiesXml(properties, paragraphMarkPropertie
     emitComplexScriptSize: suppressBold || emitListDefaults || emitParsedComplexSize,
     emitExplicitComplexScriptSize: true,
     emitDefaultColor: suppressBold || emitListDefaults,
-    emitDefaultHighlight: suppressBold || emitListDefaults,
-    emitUnderlineHighlight: !documentOptions.lineGridWithoutHeaderSubdocument && documentOptions.emitUnderlineHighlight !== false,
-    suppressBold,
-    suppressComplexScriptSize: documentOptions.suppressComplexScriptSize,
-    suppressComplexScriptToggles: documentOptions.lineGridWithoutHeaderSubdocument,
-    forceComplexScriptBoldToggle: emitNegativeGridBaseline,
-    emitBaselineVertAlign: emitNegativeGridBaseline,
-  });
+	    emitDefaultHighlight: suppressBold || emitListDefaults,
+	    emitUnderlineHighlight: !documentOptions.lineGridWithoutHeaderSubdocument && documentOptions.emitUnderlineHighlight !== false,
+	    suppressBold,
+	    suppressComplexScriptSize: documentOptions.suppressComplexScriptSize,
+	    suppressComplexScriptToggles: documentOptions.lineGridWithoutHeaderSubdocument,
+      emitExtendedCharacterToggles: documentOptions.emitExtendedCharacterToggles === true,
+	    forceComplexScriptBoldToggle: emitNegativeGridBaseline,
+	    emitBaselineVertAlign: emitNegativeGridBaseline,
+	  });
   if (paragraphRunProperties) {
     parts.push(paragraphRunProperties);
   } else {
@@ -1403,6 +1582,7 @@ function paragraphToXml(paragraph, properties, characterProperties, fontTable, c
   const charCount = paragraph.text.length;
   const paragraphMarkProperties = characterProperties[paragraph.cpEnd - 1] ?? characterProperties[charIdx + charCount] ?? null;
   const bookmarkEvents = buildBookmarkEventsForParagraph(documentOptions.bookmarks ?? [], paragraph);
+  const paragraphOptions = withParagraphSectionOptions(documentOptions, spacingSectionProperties);
   const pPr = buildParagraphPropertiesXml(
     properties,
     paragraphMarkProperties,
@@ -1411,17 +1591,31 @@ function paragraphToXml(paragraph, properties, characterProperties, fontTable, c
     spacingSectionProperties,
     sectionIndex,
     paragraph.text,
-    documentOptions,
+    paragraphOptions,
   );
-  const runs = buildRuns(paragraph.text, characterProperties, fontTable, charIdx, properties, null, {
-    suppressComplexScriptSize: documentOptions.suppressComplexScriptSize,
-  }, bookmarkEvents);
+	  const runs = buildRuns(paragraph.text, characterProperties, fontTable, charIdx, properties, null, {
+	    suppressComplexScriptSize: paragraphOptions.suppressComplexScriptSize,
+    suppressComplexScriptToggles: paragraphOptions.suppressComplexScriptToggles,
+    emitExtendedCharacterToggles: paragraphOptions.emitExtendedCharacterToggles,
+	  }, bookmarkEvents);
   const pid = paraId || nextParaId();
   const emptyParagraphBookmarks = paragraph.text.length === 0
     ? bookmarkTagsAtCp(bookmarkEvents, paragraph.cpStart)
     : "";
   return {
     xml: `    <w:p w14:paraId="${pid}">${pPr}${emptyParagraphBookmarks}${runs}</w:p>\n`,
+  };
+}
+
+function withParagraphSectionOptions(documentOptions, sectionProperties = null) {
+  if (!sectionProperties) return documentOptions;
+  return {
+    ...documentOptions,
+    // MS-DOC-SPEC/16 sprmPDxcLeft1 stores character-unit indentation, and
+    // sprmSClm controls section character grid spacing. Only sections that
+    // actually omit sprmSClm need WPS' font-size twip resolution.
+    resolveCharUnitIndentFromFont: sectionProperties.docGridType === 2
+      && sectionProperties.docGridCharSpace == null,
   };
 }
 
@@ -1658,7 +1852,7 @@ function buildRunPropertiesXml(characterProperties, fontTable, charIdx, override
   return buildRunPropertiesXmlFromProps(props, fontTable, { includeDefaults: true, suppressBold: overrides?.bold === false, ...runDefaults });
 }
 
-function buildRunPropertiesXmlFromProps(props, fontTable, { includeDefaults, emitComplexScriptSize = false, emitExplicitComplexScriptSize = false, emitDefaultColor = false, emitDefaultHighlight = false, emitUnderlineHighlight = true, suppressBold = false, suppressComplexScriptSize = false, suppressComplexScriptToggles = false, suppressDefaultRunFonts = false, forceComplexScriptBoldToggle = false, emitBaselineVertAlign = false }) {
+function buildRunPropertiesXmlFromProps(props, fontTable, { includeDefaults, emitComplexScriptSize = false, emitExplicitComplexScriptSize = false, emitDefaultColor = false, emitDefaultHighlight = false, emitUnderlineHighlight = true, suppressBold = false, suppressComplexScriptSize = false, suppressComplexScriptToggles = false, suppressDefaultRunFonts = false, forceComplexScriptBoldToggle = false, emitBaselineVertAlign = false, emitExtendedCharacterToggles = false }) {
   if (!props && !includeDefaults) return "";
   if (!props) return `<w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/><w:w w:val="100"/></w:rPr>`;
 
@@ -1686,22 +1880,35 @@ function buildRunPropertiesXmlFromProps(props, fontTable, { includeDefaults, emi
     parts.push(props.charSnapToGrid ? `<w:snapToGrid/>` : `<w:snapToGrid w:val="0"/>`);
   }
 
-  if (props.bold === true) {
-    parts.push(`<w:b/>`);
-    if (!suppressComplexScriptToggles && (hasComplexScriptFont || forceComplexScriptBoldToggle)) parts.push(`<w:bCs/>`);
-  } else if (props.bold === false || suppressBold) {
-    parts.push(`<w:b w:val="0"/>`);
-    if (!suppressComplexScriptToggles && (hasComplexScriptFont || forceComplexScriptBoldToggle)) {
-      parts.push((suppressComplexScriptSize || forceComplexScriptBoldToggle) ? `<w:bCs w:val="0"/>` : `<w:bCs/>`);
-    }
+	  if (props.bold === true) {
+	    parts.push(`<w:b/>`);
+	    if (!suppressComplexScriptToggles && (hasComplexScriptFont || forceComplexScriptBoldToggle)) parts.push(`<w:bCs/>`);
+	  } else if (props.bold === false || suppressBold) {
+	    parts.push(`<w:b w:val="0"/>`);
+	    if (!suppressComplexScriptToggles && (hasComplexScriptFont || forceComplexScriptBoldToggle)) {
+	      parts.push((suppressComplexScriptSize || forceComplexScriptBoldToggle) ? `<w:bCs w:val="0"/>` : `<w:bCs/>`);
+	    }
+	  }
+  if (emitExtendedCharacterToggles) {
+    if (props.boldCs === true) parts.push(`<w:bCs/>`);
+    else if (props.boldCs === false) parts.push(`<w:bCs w:val="0"/>`);
   }
-  if (props.italic === true) {
-    parts.push(`<w:i/>`);
-  } else if (props.italic === false) {
-    parts.push(`<w:i w:val="0"/>`);
-    if (!suppressComplexScriptToggles && (hasComplexScriptFont || emitComplexScriptSize)) {
-      parts.push(`<w:iCs w:val="0"/>`);
-    }
+	  if (props.italic === true) {
+	    parts.push(`<w:i/>`);
+	  } else if (props.italic === false) {
+	    parts.push(`<w:i w:val="0"/>`);
+	    if (!suppressComplexScriptToggles && (hasComplexScriptFont || emitComplexScriptSize)) {
+	      parts.push(`<w:iCs w:val="0"/>`);
+	    }
+	  }
+  if (emitExtendedCharacterToggles) {
+    if (props.italicCs === true) parts.push(`<w:iCs/>`);
+    else if (props.italicCs === false) parts.push(`<w:iCs w:val="0"/>`);
+    appendToggleRunProperty(parts, "caps", props.caps);
+    appendToggleRunProperty(parts, "smallCaps", props.smallCaps);
+    appendToggleRunProperty(parts, "strike", props.strike);
+    appendToggleRunProperty(parts, "dstrike", props.dstrike);
+    appendToggleRunProperty(parts, "vanish", props.vanish);
   }
   if (props.textColor != null) {
     // MS-DOC color index 0 is automatic. WPS exports automatic text over an
@@ -1780,29 +1987,20 @@ function buildRunPropertiesXmlFromProps(props, fontTable, { includeDefaults, emi
   return parts.length > 0 ? `<w:rPr>${parts.join("")}</w:rPr>` : "";
 }
 
+function appendToggleRunProperty(parts, name, value) {
+  if (value === true) {
+    parts.push(`<w:${name}/>`);
+  } else if (value === false) {
+    parts.push(`<w:${name} w:val="0"/>`);
+  }
+}
+
 function langIdToBcp47(langId) {
   // MS-DOC-SPEC/16 §sprmCRgLid0/sprmCRgLid1 stores a LID value.
-  // LID meanings come from Microsoft's LCID table:
-  // https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-lcid/
-  const map = {
-    0x0004: "zh-Hans",
-    0x0804: "zh-CN",
-    0x7804: "zh",
-    0x0404: "zh-TW",
-    0x0411: "ja-JP",
-    0x0412: "ko-KR",
-    0x0409: "en-US",
-    0x0401: "ar-SA",
-    0x040c: "fr-FR",
-    0x0407: "de-DE",
-    0x0410: "it-IT",
-    0x040a: "es-ES",
-    0x0419: "ru-RU",
-    0x0001: "ar",
-  };
-  const tag = map[langId];
+  // Map concrete LCIDs via MS-OE376 ST_LangCode and unique MS-LCID rows.
+  const tag = lcidToBcp47(langId);
   if (!tag) {
-    throw new Error(`Unsupported MS-DOC LID 0x${langId.toString(16)}`);
+    throw new Error(`Unimplemented or ambiguous MS-DOC LID to BCP47 mapping for 0x${langId.toString(16)}`);
   }
   return tag;
 }
@@ -1862,11 +2060,11 @@ function buildParagraphPropertiesXml(properties, paragraphMarkProperties = null,
     parts.push(`<w:textAlignment w:val="${properties.textAlignment}"/>`);
   }
 
-  const paragraphRunProperties = buildRunPropertiesXmlFromProps(paragraphMarkProperties, fontTable, {
-    includeDefaults: false,
-    emitExplicitComplexScriptSize: paragraphMarkProperties?.langIdBidi != null,
-    suppressComplexScriptSize: documentOptions.suppressComplexScriptSize,
-  });
+	  const paragraphRunProperties = buildRunPropertiesXmlFromProps(paragraphMarkProperties, fontTable, {
+	    includeDefaults: false,
+	    emitExplicitComplexScriptSize: paragraphMarkProperties?.langIdBidi != null,
+	    suppressComplexScriptSize: documentOptions.suppressComplexScriptSize,
+	  });
   if (paragraphRunProperties) {
     parts.push(paragraphRunProperties);
   }
@@ -1945,21 +2143,23 @@ function appendParagraphSpacingXml(parts, properties, sectionProperties = null, 
   if (properties?.spacingBefore != null) {
     spacingParts.push(`w:before="${properties.spacingBefore}"`);
   }
-  if (properties?.spacingBeforeAuto != null) {
-    spacingParts.push(`w:beforeAutospacing="${properties.spacingBeforeAuto ? 1 : 0}"`);
-  } else if (properties?.spacingBeforeLines != null) {
-    // MS-DOC-SPEC/16 sprmPDylBefore is already stored as 1/100 line units.
-    spacingParts.push(`w:beforeLines="${properties.spacingBeforeLines}"`);
-  }
-  if (properties?.spacingAfter != null) {
-    spacingParts.push(`w:after="${properties.spacingAfter}"`);
-  }
-  if (properties?.spacingAfterAuto != null) {
-    spacingParts.push(`w:afterAutospacing="${properties.spacingAfterAuto ? 1 : 0}"`);
-  } else if (properties?.spacingAfterLines != null) {
-    // MS-DOC-SPEC/16 sprmPDylAfter is already stored as 1/100 line units.
-    spacingParts.push(`w:afterLines="${properties.spacingAfterLines}"`);
-  }
+  if ((!properties?.spacingBeforeAuto || properties.spacingBeforeAuto == null) && properties?.spacingBeforeLines != null) {
+	    // MS-DOC-SPEC/16 sprmPDylBefore is already stored as 1/100 line units.
+	    spacingParts.push(`w:beforeLines="${properties.spacingBeforeLines}"`);
+	  }
+	  if (properties?.spacingBeforeAuto != null) {
+	    spacingParts.push(`w:beforeAutospacing="${properties.spacingBeforeAuto ? 1 : 0}"`);
+	  }
+	  if (properties?.spacingAfter != null) {
+	    spacingParts.push(`w:after="${properties.spacingAfter}"`);
+	  }
+  if ((!properties?.spacingAfterAuto || properties.spacingAfterAuto == null) && properties?.spacingAfterLines != null) {
+	    // MS-DOC-SPEC/16 sprmPDylAfter is already stored as 1/100 line units.
+	    spacingParts.push(`w:afterLines="${properties.spacingAfterLines}"`);
+	  }
+	  if (properties?.spacingAfterAuto != null) {
+	    spacingParts.push(`w:afterAutospacing="${properties.spacingAfterAuto ? 1 : 0}"`);
+	  }
   if (properties?.lineSpacing) {
     spacingParts.push(`w:line="${properties.lineSpacing.twips}" w:lineRule="${properties.lineSpacing.rule}"`);
   }
@@ -2027,7 +2227,7 @@ function resolveFirstLineIndentTwips(properties, paragraphMarkProperties = null,
   return properties?.firstLineIndent ?? null;
 }
 
-function buildSectionPropertiesXml(properties = {}, { defaultFooterId, evenFooterId, firstFooterId, final = false, sectionIndex = -1 } = {}) {
+function buildSectionPropertiesXml(properties = {}, { defaultFooterId, evenFooterId, firstFooterId, defaultHeaderId, evenHeaderId, firstHeaderId, final = false, sectionIndex = -1 } = {}) {
   const section = properties ?? {};
   const pageWidth = section.pageWidth ?? 11906;
   const pageHeight = section.pageHeight ?? 16838;
@@ -2040,6 +2240,9 @@ function buildSectionPropertiesXml(properties = {}, { defaultFooterId, evenFoote
   const isLandscape = pageWidth > pageHeight;
   const parts = [];
 
+  if (firstHeaderId) parts.push(`<w:headerReference r:id="${firstHeaderId}" w:type="first"/>`);
+  if (defaultHeaderId) parts.push(`<w:headerReference r:id="${defaultHeaderId}" w:type="default"/>`);
+  if (evenHeaderId) parts.push(`<w:headerReference r:id="${evenHeaderId}" w:type="even"/>`);
   if (firstFooterId) parts.push(`<w:footerReference r:id="${firstFooterId}" w:type="first"/>`);
   if (defaultFooterId) parts.push(`<w:footerReference r:id="${defaultFooterId}" w:type="default"/>`);
   if (evenFooterId) parts.push(`<w:footerReference r:id="${evenFooterId}" w:type="even"/>`);
@@ -2064,7 +2267,7 @@ function buildSectionPropertiesXml(properties = {}, { defaultFooterId, evenFoote
   if (section.pageBorders) {
     const sides = ["top", "left", "bottom", "right"];
     if (!sides.every((side) => section.pageBorders[side]?.style === "none")) {
-      throw new Error("Unsupported partial or non-empty page borders");
+      throw new Error("Unimplemented section page border emission for partial or non-empty page borders");
     }
     parts.push(`<w:pgBorders>${sides.map((side) => `<w:${side} w:val="none" w:sz="0" w:space="0"/>`).join("")}</w:pgBorders>`);
   }
@@ -2095,7 +2298,7 @@ function buildSectionPropertiesXml(properties = {}, { defaultFooterId, evenFoote
   if (section.docGridType != null) {
     const docGridType = sectionDocGridTypeToXml(section.docGridType);
     if (docGridType == null) {
-      throw new Error(`Unsupported section docGrid type ${section.docGridType}`);
+      throw new Error(`Out-of-spec section docGrid type ${section.docGridType}`);
     }
     if (section.docGridLinePitch == null) {
       throw new Error("Incomplete section docGrid properties: missing line pitch");
@@ -2235,12 +2438,13 @@ function createFontTableXml(fontTable = []) {
 
   // Extract docGrid line pitch from sections for beforeLines/afterLines computation
   const sections = wpsDocument.sections ?? [];
-  const docGridLinePitch = sections.find(s => s?.properties?.docGridLinePitch != null)?.properties?.docGridLinePitch ?? null;
-  const hasEastAsianGrid = sections.some((section) => section?.properties?.docGridType === 1 || section?.properties?.docGridType === 2);
+	  const docGridLinePitch = sections.find(s => s?.properties?.docGridLinePitch != null)?.properties?.docGridLinePitch ?? null;
+	  const hasEastAsianGrid = sections.some((section) => section?.properties?.docGridType === 1 || section?.properties?.docGridType === 2);
+  const preserveParsedStyleOrder = hasCompactGridHeaderSubdocument(wpsDocument, sections);
 
-  const styleEntries = styles
-    .filter((s) => s !== null)
-    .sort((a, b) => compareStylesForWpsExport(a, b, styles))
+	  const styleEntries = styles
+	    .filter((s) => s !== null)
+	    .sort((a, b) => compareStylesForWpsExport(a, b, styles, { preserveParsedStyleOrder }))
     .map((style) => createStyleXml(style, styles, fontTable, docGridLinePitch, { hasEastAsianGrid }));
 
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -2349,8 +2553,13 @@ function buildTableStylePropertiesXml(style, tableSideMargin) {
 }
 
 // WPS export order: Normal(sti=0) → DPF(sti=65) → Normal Table(sti=105) → others in original order
-function compareStylesForWpsExport(a, b, styles = []) {
+function compareStylesForWpsExport(a, b, styles = [], { preserveParsedStyleOrder = false } = {}) {
   if (hasDuplicateStyleIds(styles)) {
+    return (a.order ?? a.index ?? 0) - (b.order ?? b.index ?? 0);
+  }
+  if (preserveParsedStyleOrder) {
+    // MS-DOC-SPEC/19 STSH stores styles as an array of STD entries. Compact
+    // CR-only grid-header WPS exports keep that parsed order for built-ins.
     return (a.order ?? a.index ?? 0) - (b.order ?? b.index ?? 0);
   }
   const rankA = styleExportRank(a);
@@ -2559,8 +2768,15 @@ function buildStyleRunPropertiesXml(style, fontTable) {
   // and automatic complex-script toggles (bCs). Only emit szCs when it is
   // explicitly set (emitExplicitComplexScriptSize=true handles that path).
   // This matches WPS Office expected output: style rPr omits redundant Cs props.
-  const runPropertiesXml = style.runProperties
-    ? buildRunPropertiesXmlFromProps(style.runProperties, fontTable, { includeDefaults: false, emitExplicitComplexScriptSize: true, emitUnderlineHighlight: false, suppressComplexScriptSize: true, suppressComplexScriptToggles: true })
+  // MS-DOC StdfBase.sti identifies built-in Heading 1..9. MS-OI29500's
+  // built-in style mapping defines those heading styles with bold run defaults:
+  // https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oi29500/716e4d7c-3b23-4210-9617-2b8324486a3b
+  const isBuiltInHeading = style.sti >= 1 && style.sti <= 9;
+  const runProperties = style.runProperties && isBuiltInHeading && style.runProperties.bold == null
+    ? { ...style.runProperties, bold: true }
+    : style.runProperties;
+  const runPropertiesXml = runProperties
+    ? buildRunPropertiesXmlFromProps(runProperties, fontTable, { includeDefaults: false, emitExplicitComplexScriptSize: true, emitUnderlineHighlight: false, suppressComplexScriptSize: true, suppressComplexScriptToggles: !isBuiltInHeading })
     : "";
   return runPropertiesXml;
 }

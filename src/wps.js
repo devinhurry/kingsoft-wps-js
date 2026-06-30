@@ -10,7 +10,7 @@ export async function readWpsFile(filePath) {
 export function readWps(input) {
   const cfb = new CompoundFile(input);
   if (!cfb.hasStream("WordDocument")) {
-    throw new Error("Unsupported WPS file: missing WordDocument stream");
+    throw new Error("Invalid WPS file: missing WordDocument stream");
   }
 
   const wordDocument = cfb.readStream("WordDocument");

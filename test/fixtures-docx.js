@@ -57,7 +57,7 @@ function readLocalEntry(buffer, localHeaderOffset, compressionMethod, compressed
       return inflateSync(data);
     }
   }
-  throw new Error(`Unsupported DOCX fixture compression method: ${compressionMethod}`);
+  throw new Error(`Unimplemented DOCX fixture compression method: ${compressionMethod}`);
 }
 
 function findEndOfCentralDirectory(buffer) {
