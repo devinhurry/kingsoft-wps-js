@@ -2124,11 +2124,76 @@ function sectionDocGridTypeToXml(docGridType) {
 }
 
 function sectionPageNumberFormatToXml(pageNumberFormat) {
+  if (pageNumberFormat == null) return "decimal";
   // MS-DOC-SPEC/16 sprmSNfcPgn stores an MSONFC page-number format.
-  // Value 57 is msonfcNumberInDash, represented in OOXML as numberInDash.
-  if (pageNumberFormat == null || pageNumberFormat === 0) return "decimal";
-  if (pageNumberFormat === 57) return "numberInDash";
-  throw new Error(`Unsupported section page-number format ${pageNumberFormat}`);
+  // MS-OSHARED §2.2.1.3 maps MSONFC values to OOXML ST_NumberFormat:
+  // https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-oshared/57c8f7d4-1426-44e0-b58d-6fa1a5a81659
+  const msonfcToNumberFormat = {
+    0x00: "decimal",
+    0x01: "upperRoman",
+    0x02: "lowerRoman",
+    0x03: "upperLetter",
+    0x04: "lowerLetter",
+    0x05: "ordinal",
+    0x06: "cardinalText",
+    0x07: "ordinalText",
+    0x08: "hex",
+    0x09: "chicago",
+    0x0a: "ideographDigital",
+    0x0b: "japaneseCounting",
+    0x0c: "Aiueo",
+    0x0d: "Iroha",
+    0x0e: "decimalFullWidth",
+    0x0f: "decimalHalfWidth",
+    0x10: "japaneseLegal",
+    0x11: "japaneseDigitalTenThousand",
+    0x12: "decimalEnclosedCircle",
+    0x13: "decimalFullWidth2",
+    0x14: "aiueoFullWidth",
+    0x15: "irohaFullWidth",
+    0x16: "decimalZero",
+    0x17: "bullet",
+    0x18: "ganada",
+    0x19: "chosung",
+    0x1a: "decimalEnclosedFullstop",
+    0x1b: "decimalEnclosedParen",
+    0x1c: "decimalEnclosedCircleChinese",
+    0x1d: "ideographEnclosedCircle",
+    0x1e: "ideographTraditional",
+    0x1f: "ideographZodiac",
+    0x20: "ideographZodiacTraditional",
+    0x21: "taiwaneseCounting",
+    0x22: "ideographLegalTraditional",
+    0x23: "taiwaneseCountingThousand",
+    0x24: "taiwaneseDigital",
+    0x25: "chineseCounting",
+    0x26: "chineseLegalSimplified",
+    0x27: "chineseCountingThousand",
+    0x28: "decimal",
+    0x29: "koreanDigital",
+    0x2a: "koreanCounting",
+    0x2b: "koreanLegal",
+    0x2c: "koreanDigital2",
+    0x2d: "hebrew1",
+    0x2e: "arabicAlpha",
+    0x2f: "hebrew2",
+    0x30: "arabicAbjad",
+    0x31: "hindiVowels",
+    0x32: "hindiConsonants",
+    0x33: "hindiNumbers",
+    0x34: "hindiCounting",
+    0x35: "thaiLetters",
+    0x36: "thaiNumbers",
+    0x37: "thaiCounting",
+    0x38: "vietnameseCounting",
+    0x39: "numberInDash",
+    0x3a: "russianLower",
+    0x3b: "russianUpper",
+    0xff: "none",
+  };
+  const numberFormat = msonfcToNumberFormat[pageNumberFormat];
+  if (numberFormat) return numberFormat;
+  throw new Error(`Out-of-spec section page-number MSONFC value ${pageNumberFormat}`);
 }
 
 function prqToFamily(prq) {
